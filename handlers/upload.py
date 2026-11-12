@@ -1,3 +1,4 @@
+
 """
 handlers/upload.py
 Admin file uploads: copy the file into the Database Channel, create a random-token
@@ -72,7 +73,7 @@ async def handle_upload(update, context):
     if not channel:
         await msg.reply_text(
             "⚠️ Set the <b>Database Channel</b> first.",
-            reply_markup=M([[B("📡 Set Database Channel", "adm:dbch")]]))
+            reply_markup=M([[B("📡 Set Database Channel", callback_data="adm:dbch")]]))
         return
 
     try:
@@ -81,7 +82,7 @@ async def handle_upload(update, context):
         await msg.reply_text(
             f"⚠️ Could not copy to the Database Channel: <code>{html.escape(str(e))}</code>\n"
             "Make sure the bot is still an admin there (or re-set the channel from the panel).",
-            reply_markup=M([[B("📡 Database Channel", "adm:dbch")]]))
+            reply_markup=M([[B("📡 Database Channel", callback_data="adm:dbch")]]))
         return
     except TelegramError as e:
         await msg.reply_text(f"⚠️ Upload failed: <code>{html.escape(str(e))}</code>")
