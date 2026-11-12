@@ -40,7 +40,8 @@ DEFAULTS = {
     "start_caption": DEFAULT_CAPTION,
     "custom_buttons": [],         # rows of [[text, url], ...]
     "autodelete": 0,              # minutes, 0 = off
-    "protect": False,             # protect_content on delivered files
+    "delivery_mode": "forward",   # "forward" = send the files in chat, "stream" = Stream/Download web links
+    "protect": False,             # protect_content on delivered files (forward mode only)
     "custom_caption": "",         # HTML, replaces original caption when set
     "remove_caption": False,      # strip original caption
     "shortener_enabled": False,
