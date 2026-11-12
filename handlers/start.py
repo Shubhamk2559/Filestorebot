@@ -7,9 +7,10 @@ The ONLY typed command: /start.
 Also: the "✅ I've Joined" / "Verify" callback and the file delivery routine.
 """
 import asyncio
+import html
 import logging
 
-from telegram import InlineKeyboardMarkup as M
+from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from telegram.ext import ContextTypes
@@ -17,9 +18,10 @@ from telegram.ext import ContextTypes
 from database import db
 from database.db import settings as S
 from handlers import admin
-from utils.keyboards import B
 from utils.helpers import call, is_admin, notify_owner, render_caption, retry_seconds
 from utils.membership import get_missing
+from utils.streamer import human_size, streamer
+import config
 
 log = logging.getLogger(__name__)
 USER_GONE = ("blocked", "deactivated", "can't initiate", "user is deleted")
@@ -149,10 +151,23 @@ def _caption_override():
 
 
 async def deliver(bot, chat_id: int, link: dict):
+    """One link, two behaviours - chosen by the admin (Delivery Mode): forward the files, or stream them."""
     channel = S.get("db_channel")
     if not channel:
         await call(bot.send_message, chat_id, "⚠️ The bot is not configured yet. Please try later.")
         return
+    if S.get("delivery_mode") == "stream":
+        if streamer.ready:
+            if await deliver_stream(bot, chat_id, link, channel):
+                return
+        else:  # admin chose streaming but the engine is down: don't leave users empty-handed
+            await notify_owner(bot, "stream_down",
+                               f"⚠️ Delivery mode is Stream but the streaming engine is off ({streamer.error}). "
+                               "Falling back to normal forwarding.")
+    await deliver_forward(bot, chat_id, link, channel)
+
+
+async def deliver_forward(bot, chat_id: int, link: dict, channel: dict):
     protect, caption = S.get("protect"), _caption_override()
     sent, skipped = [], 0
 
@@ -196,6 +211,60 @@ async def deliver(bot, chat_id: int, link: dict):
         await db.schedule_delete(chat_id, sent, minutes)
     if skipped:
         await call(bot.send_message, chat_id, f"ℹ️ {skipped} file(s) are no longer available.")
+
+
+STREAM_PAGE = 10  # files per message (2 buttons each, Telegram allows 100 buttons per keyboard)
+
+
+async def deliver_stream(bot, chat_id: int, link: dict, channel: dict) -> bool:
+    """Send Stream / Download buttons instead of the files. Returns False to let the caller fall back."""
+    token, ids = link["_id"], link["ids"]
+    try:
+        infos = await streamer.get_infos(channel["id"], ids)
+    except TelegramError as e:
+        await _config_problem(bot, channel, e)
+        return False
+    except Exception as e:  # MTProto hiccup (RPC error, timeout...) -> fall back to forwarding
+        log.warning("Stream info failed, falling back to forward: %s", e)
+        return False
+    files = [infos[m] for m in ids if m in infos]
+    if not files:
+        await _unavailable(bot, chat_id)
+        return True
+
+    sent = []
+    for p in range(0, len(files), STREAM_PAGE):
+        page = files[p:p + STREAM_PAGE]
+        lines, rows = [], []
+        for n, f in enumerate(page, start=p + 1):
+            url = f"{config.BASE_URL}/dl/{token}/{f.msg_id}"
+            icon = "🎬" if f.mime.startswith("video/") else "🎵" if f.mime.startswith("audio/") else "📄"
+            lines.append(f"{icon} <b>{html.escape(f.name[:80])}</b>\n💾 {human_size(f.size)}")
+            row = []
+            if f.streamable:
+                row.append(B(f"▶️ Stream{f' {n}' if len(files) > 1 else ''}", url=url))
+            row.append(B(f"⬇️ Download{f' {n}' if len(files) > 1 else ''}", url=url + "?d=1"))
+            rows.append(row)
+        head = "" if len(files) == 1 else f"📦 <b>{len(files)} files</b>\n\n"
+        try:
+            m = await call(bot.send_message, chat_id, head + "\n\n".join(lines),
+                           reply_markup=M(rows), parse_mode=ParseMode.HTML)
+            sent.append(m.message_id)
+        except Forbidden as e:
+            if any(w in str(e).lower() for w in USER_GONE):
+                return True
+            raise
+        except TelegramError as e:
+            log.warning("Stream message failed: %s", e)
+            return False
+
+    await db.inc_views(token)
+    minutes = S.get("autodelete")
+    if minutes:
+        await db.schedule_delete(chat_id, sent, minutes)
+    if len(files) < len(ids):
+        await call(bot.send_message, chat_id, f"ℹ️ {len(ids) - len(files)} file(s) are no longer available.")
+    return True
 
 
 async def _unavailable(bot, chat_id):

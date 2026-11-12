@@ -17,7 +17,7 @@ import re
 
 import config
 
-from telegram import InlineKeyboardMarkup as M, LinkPreviewOptions
+from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, LinkPreviewOptions
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, TelegramError
 
@@ -25,9 +25,9 @@ from database import db
 from database.db import settings as S
 from handlers import broadcast, upload
 from utils import keyboards as K
-from utils.keyboards import B
 from utils.helpers import (admin_only, owner_only, is_admin, is_owner, extract_chat_ref,
                            extract_user_id, extract_post_id)
+from utils.streamer import streamer
 
 log = logging.getLogger(__name__)
 NOPREVIEW = LinkPreviewOptions(is_disabled=True)
@@ -87,6 +87,7 @@ def panel_text() -> str:
         f"🔔 Force-sub: {'ON' if S.get('fsub_enabled') else 'OFF'} "
         f"({len(fs)} channel{'s' if len(fs) != 1 else ''})\n"
         f"⏱ Auto-delete: {f'{ad} min' if ad else 'off'}\n"
+        f"🎬 Delivery: {'Stream 🌐' if S.get('delivery_mode') == 'stream' else 'Forward 📩'}\n"
         f"🛡 Protect content: {'ON' if S.get('protect') else 'OFF'}\n\n"
         "📤 <i>Send me any file to get a share link.</i>"
     )
@@ -473,6 +474,31 @@ async def st_btns(update, context):
 async def a_btnclr(update, context, args):
     await S.set("custom_buttons", [])
     await show(update, "✅ Custom buttons cleared.", K.back("btns"))
+
+
+# ===================================================================== delivery mode (forward / stream)
+@action("mode")
+async def a_mode(update, context, args):
+    note = ""
+    if args and args[0] in ("forward", "stream"):
+        if args[0] == "stream" and not streamer.ready:
+            note = f"⚠️ Streaming can't be enabled: <code>{html.escape(streamer.error or 'engine not running')}</code>\n\n"
+        else:
+            await S.set("delivery_mode", args[0])
+            note = "✅ Saved.\n\n"
+    cur = S.get("delivery_mode")
+
+    def b(m, label):
+        return B(("✅ " if cur == m else "") + label, f"adm:mode:{m}")
+    status = "✅ ready" if streamer.ready else f"❌ off ({html.escape(streamer.error or 'not started')})"
+    await show(update,
+               f"{note}🎬 <b>Delivery Mode</b>\n\n"
+               "The share link stays the same - this decides what a user gets when they open it:\n\n"
+               "📩 <b>Forward</b> - the files are sent into the chat (Auto-Delete / Protect / File Caption apply).\n"
+               "🌐 <b>Stream</b> - the user gets ▶️ Stream and ⬇️ Download buttons "
+               "(web links, works for big files, no 20 MB limit). Force-Sub still applies.\n\n"
+               f"Current: <b>{'Stream' if cur == 'stream' else 'Forward'}</b>\nStreaming engine: {status}",
+               M([[b("forward", "📩 Forward"), b("stream", "🌐 Stream")], [B("🔙 Back", "adm:home")]]))
 
 
 # ===================================================================== auto-delete / protect

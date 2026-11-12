@@ -6,14 +6,13 @@ deep link. Also used by Batch mode (many files -> ONE link).
 import html
 import logging
 
-from telegram import InlineKeyboardMarkup as M
+from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, TelegramError
 
 from database import db
 from database.db import settings as S
 from utils import keyboards as K
-from utils.keyboards import B
 from utils.helpers import call
 from utils.shortener import shorten
 
