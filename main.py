@@ -14,7 +14,8 @@ from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandl
 import config
 from database import db
 from handlers import admin, start
-from utils.health import start_health_server
+from utils.streamer import streamer
+from utils.web import start_web_server
 from utils.scheduler import autodelete_loop
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=config.LOG_LEVEL)
@@ -24,12 +25,15 @@ log = logging.getLogger("bot")
 
 async def post_init(app):
     await db.init_db()                                   # connect, indexes, load cached settings
-    app.bot_data["health"] = await start_health_server(config.PORT)
+    app.bot_data["health"] = await start_web_server(config.PORT)   # /health + /dl/<token>/<id> streaming
+    await streamer.start()                               # MTProto engine (needs API_ID, API_HASH, BASE_URL)
     app.bot_data["gc"] = asyncio.create_task(autodelete_loop(app.bot))
-    log.info("Bot @%s started (health on :%s)", app.bot.username, config.PORT)
+    log.info("Bot @%s started (web on :%s, streaming %s)", app.bot.username, config.PORT,
+             "ON" if streamer.ready else f"OFF ({streamer.error})")
 
 
 async def post_shutdown(app):
+    await streamer.stop()
     task = app.bot_data.get("gc")
     if task:
         task.cancel()
