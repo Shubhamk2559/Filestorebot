@@ -159,8 +159,8 @@ async def resolve_channel(update, context, need_post: bool):
 
     if ref is None:
         await msg.reply_text(
-            "⚠️ I couldn't find a channel in that.\n"
-            "Forward a message from the channel, or send its ID / @username.",
+            "⚠️ Channel not found.\n"
+            "Forward a message from the channel, or send its ID or @username.",
             reply_markup=K.cancel(),
         )
         return None
@@ -171,8 +171,8 @@ async def resolve_channel(update, context, need_post: bool):
 
     except TelegramError as e:
         await msg.reply_text(
-            f"⚠️ I can't access that chat (<code>{html.escape(str(e))}</code>).\n"
-            "Add me as an admin there and try again.",
+            f"⚠️ Unable to access this chat (<code>{html.escape(str(e))}</code>).\n"
+            "Add the bot as an admin and try again.",
             reply_markup=K.cancel(),
         )
         return None
@@ -294,8 +294,8 @@ async def a_dbch(update, context, args):
         context,
         "dbch",
         f"📡 <b>Database Channel</b>\nCurrent: {cur_txt}\n\n"
-        "Forward any message from your channel here, or send its ID / @username.\n"
-        "The bot must be an <b>admin</b> there with permission to post.",
+        "Forward a message from the channel, or send its ID or @username.\n"
+        "The bot must be an <b>admin</b> with permission to post.",
     )
 
 
@@ -316,7 +316,7 @@ async def st_dbch(update, context):
     await update.effective_message.reply_text(
         f"✅ Database channel set to <b>{html.escape(chat.title or '')}</b> "
         f"(<code>{chat.id}</code>).\n"
-        "All uploaded files will be copied there.",
+        "Uploaded files will be stored in this channel.",
         reply_markup=K.back(),
     )
 
@@ -360,7 +360,7 @@ async def a_addadmin(update, context, args):
         context,
         "addadmin",
         "👮 <b>Add Admin</b>\n\n"
-        "Forward a message from the user, or send their numeric user ID.",
+        "Forward a message from the user, or send their user ID.",
     )
 
 
@@ -375,8 +375,8 @@ async def st_addadmin(update, context):
 
     if uid is None:
         await msg.reply_text(
-            "⚠️ Couldn't read a user ID (hidden forwards don't expose it). "
-            "Send the numeric ID instead.",
+            "⚠️ Unable to read the user ID (the user's forwarding is hidden).\n"
+            "Please send the numeric ID instead.",
             reply_markup=K.cancel(),
         )
         return
@@ -436,8 +436,8 @@ async def show_fsub(update, note=""):
     await show(
         update,
         f"{note}🔔 <b>Force-Subscribe</b>: {'ON ✅' if on else 'OFF ⛔'}\n\n"
-        "Users must join all channels below (order = button order). "
-        "Use ⬆️ ⬇️ to reorder, ❌ to remove.",
+        "Users must join all channels listed below.\n"
+        "Use ⬆️ ⬇️ to reorder and ❌ to remove.",
         M(rows),
     )
 
@@ -460,8 +460,7 @@ async def a_fsubadd(update, context, args):
         context,
         "fsubadd",
         "➕ <b>Add Force-Sub Channel</b>\n\n"
-        "Forward a message from the channel, or send its ID / @username "
-        "(public or private).\n"
+        "Forward a message from the channel, or send its ID or @username.\n"
         "The bot must be an <b>admin</b> there.",
     )
 
@@ -488,8 +487,8 @@ async def st_fsubadd(update, context):
 
     if not link:
         await msg.reply_text(
-            "⚠️ I couldn't create an invite link. Give me the "
-            "“Invite Users” right and try again.",
+            "⚠️ Unable to create an invite link.\n"
+            "Grant the bot the “Invite Users” permission and try again.",
             reply_markup=K.cancel(),
         )
         return
@@ -579,7 +578,7 @@ async def st_simg(update, context):
 
     if not msg.photo:
         await msg.reply_text(
-            "⚠️ Please send a photo (as a photo, not a file).",
+            "⚠️ Please send a photo, not a file.",
             reply_markup=K.cancel(),
         )
         return
@@ -601,9 +600,8 @@ async def a_scap(update, context, args):
     await show(
         update,
         "📝 <b>Start Caption</b>\n\n"
-        "Send the new caption. HTML formatting works, and you can use "
-        "<code>{first_name}</code> and <code>{mention}</code>. "
-        "Max 1000 characters.\n\n"
+        "Send the new caption (HTML supported, max 1000 characters).\n"
+        "Placeholders: <code>{first_name}</code>, <code>{mention}</code>\n\n"
         f"<b>Current:</b>\n{S.get('start_caption')}",
         M([
             [B("↩️ Reset to default", "adm:scaprs")],
@@ -686,8 +684,8 @@ async def a_btns(update, context, args):
     await show(
         update,
         "🔘 <b>Join Buttons</b>\n\n"
-        "Channel buttons are generated automatically from the "
-        "Force-Sub list. Here you can add <b>custom buttons</b> below them.\n\n"
+        "Channel buttons are created from the Force-Sub list.\n"
+        "You can add custom buttons below them.\n\n"
         f"<b>Current custom buttons:</b>\n{html.escape(cur)}",
         M([
             [B("✏️ Set custom buttons", "adm:btnset")],
@@ -706,7 +704,7 @@ async def a_btnset(update, context, args):
         "✏️ <b>Custom Buttons</b>\n\n"
         "Send one button per line:\n"
         "<code>Text - https://example.com</code>\n"
-        "Several in one row: <code>Text1 - URL1 | Text2 - URL2</code>",
+        "Multiple buttons in a row: <code>Text1 - URL1 | Text2 - URL2</code>",
     )
 
 
@@ -747,7 +745,7 @@ async def a_mode(update, context, args):
     if args and args[0] in ("forward", "stream"):
         if args[0] == "stream" and not streamer.ready:
             note = (
-                f"⚠️ Streaming can't be enabled: "
+                f"⚠️ Streaming is unavailable: "
                 f"<code>{html.escape(streamer.error or 'engine not running')}</code>\n\n"
             )
         else:
@@ -771,11 +769,9 @@ async def a_mode(update, context, args):
     await show(
         update,
         f"{note}🎬 <b>Delivery Mode</b>\n\n"
-        "The share link stays the same - this decides what a user gets when they open it:\n\n"
-        "📩 <b>Forward</b> - the files are sent into the chat "
-        "(Auto-Delete / Protect / File Caption apply).\n"
-        "🌐 <b>Stream</b> - the user gets ▶️ Stream and ⬇️ Download buttons "
-        "(web links, works for big files, no 20 MB limit). Force-Sub still applies.\n\n"
+        "Choose what users receive when they open a share link.\n\n"
+        "📩 <b>Forward</b>: files are sent in the chat.\n"
+        "🌐 <b>Stream</b>: users get Stream and Download buttons (supports large files).\n\n"
         f"Current: <b>{'Stream' if cur == 'stream' else 'Forward'}</b>\n"
         f"Streaming engine: {status}",
         M([
@@ -806,7 +802,7 @@ async def a_autodel(update, context, args):
     await show(
         update,
         f"{note}⏱ <b>Auto-Delete</b>\n\n"
-        "Delivered files are removed from the user's chat after this delay.",
+        "Delivered files are deleted from the user's chat after this time.",
         M([
             [b(0, "Off"), b(5, "5 min"), b(10, "10 min"), b(30, "30 min")],
             [B("🔙 Back", "adm:home")],
@@ -867,7 +863,7 @@ async def a_fcap(update, context, args):
         f"{note}🏷 <b>File Caption</b>\n\n"
         f"Custom caption: {custom or '— none —'}\n"
         f"Remove original caption: {'ON' if rem else 'OFF'}\n\n"
-        "Priority: custom caption → remove original → keep original.",
+        "Order: custom caption, then remove original, then keep original.",
         M([
             [
                 B("✏️ Set custom caption", "adm:fcap:set"),
@@ -928,7 +924,7 @@ async def a_short(update, context, args):
             "short_url",
             "💸 <b>Shortener API URL</b>\n\n"
             "Send the API URL, e.g. <code>https://gplinks.in/api</code>\n"
-            "I will call: <code>URL?api=KEY&amp;url=LINK&amp;format=text</code>",
+            "Request format: <code>URL?api=KEY&amp;url=LINK&amp;format=text</code>",
         )
         return
 
@@ -967,7 +963,7 @@ async def st_short_url(update, context):
     context.user_data["state"] = "short_key"
 
     await msg.reply_text(
-        "🔑 Now send your <b>API key</b>. (I will delete your message afterwards.)",
+        "🔑 Send your <b>API key</b>. The message will be deleted afterwards.",
         reply_markup=K.cancel(),
     )
 
@@ -1010,8 +1006,7 @@ async def a_bc(update, context, args):
         context,
         "bc",
         "📢 <b>Broadcast</b>\n\n"
-        "Send or forward the message you want to deliver to all users "
-        "(text, photo, video, anything).",
+        "Send or forward the message you want to broadcast to all users.",
     )
 
 
@@ -1156,10 +1151,9 @@ async def a_reset(update, context, args):
     await show(
         update,
         "♻️ <b>Reset Settings</b>\n\n"
-        "This restores captions, buttons, timers, force-sub list, "
-        "shortener, etc. to defaults.\n"
+        "All settings will be restored to default.\n"
         "Admins and the Database Channel are kept.\n\n"
-        "<b>Are you sure?</b>",
+        "<b>Do you want to continue?</b>",
         M([
             [
                 B("✅ Yes, reset", "adm:resetyes"),
@@ -1172,7 +1166,7 @@ async def a_reset(update, context, args):
 @action("resetyes")
 async def a_resetyes(update, context, args):
     await S.reset()
-    await show(update, "✅ Settings were reset to defaults.", K.back())
+    await show(update, "✅ Settings have been reset.", K.back())
 
 
 # ===================================================================== batch + links
@@ -1211,7 +1205,7 @@ async def a_batchstart(update, context, args):
     await show(
         update,
         "📦 <b>Batch mode</b>\n\n"
-        "Send your files now (any number). Tap <b>Done</b> when finished.",
+        "Send your files, then tap <b>Done</b>.",
         K.batch_kb(),
     )
 
@@ -1222,7 +1216,7 @@ async def a_batchdone(update, context, args):
     ids = sorted(set(context.user_data.get("batch_ids", [])))
 
     if not ids:
-        await q.answer("Send at least one file first!", show_alert=True)
+        await q.answer("Please send at least one file first.", show_alert=True)
         return
 
     await q.answer()
@@ -1266,8 +1260,7 @@ async def a_range(update, context, args):
         context,
         "range_first",
         "🔢 <b>Batch by range</b>\n\n"
-        "Step 1/2: forward the <b>FIRST</b> message of the range "
-        "from the Database Channel (or send its post link).",
+        "Step 1/2: forward the <b>first</b> post from the Database Channel, or send its link.",
     )
 
 
@@ -1278,8 +1271,8 @@ async def st_range_first(update, context):
 
     if pid is None:
         await msg.reply_text(
-            "⚠️ That isn't a post from the Database Channel. "
-            "Forward it (or send the t.me post link).",
+            "⚠️ This is not a post from the Database Channel.\n"
+            "Forward the post or send its link.",
             reply_markup=K.cancel(),
         )
         return
@@ -1306,8 +1299,7 @@ async def st_range_last(update, context):
         or last - first + 1 > MAX_RANGE
     ):
         await msg.reply_text(
-            f"⚠️ Forward a LAST post that comes after the first one "
-            f"(max {MAX_RANGE} posts).",
+            f"⚠️ Send a last post that comes after the first one (max {MAX_RANGE} posts).",
             reply_markup=K.cancel(),
         )
         return
@@ -1371,7 +1363,7 @@ async def a_links(update, context, args):
             f"🔗 <b>My Links</b> ({total})\n\nTap a link to view or revoke it."
             if total
             else "🔗 <b>My Links</b>\n\n"
-                 "No links yet. Send me a file to create one."
+                 "No links yet. Send a file to create one."
         ),
         M(kb),
     )
