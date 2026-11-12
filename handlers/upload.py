@@ -47,7 +47,7 @@ async def announce_link(context, chat_id: int, token: str, count: int, label: st
 async def _batch_status(context, msg):
     """Keep ONE status message updated with the running file count."""
     n = len(context.user_data.get("batch_ids", []))
-    text = f"📦 <b>Batch mode</b>\n\n{n} file(s) added.\nKeep sending files, then tap <b>Done</b>."
+    text = f"📦 <b>Batch mode</b>\n\n{n} file(s) added.\nSend more files or tap <b>Done</b>."
     st = context.user_data.get("batch_status")
     if st:
         try:
@@ -80,8 +80,8 @@ async def handle_upload(update, context):
         copied = await call(context.bot.copy_message, channel["id"], msg.chat_id, msg.message_id)
     except (Forbidden, BadRequest) as e:
         await msg.reply_text(
-            f"⚠️ Could not copy to the Database Channel: <code>{html.escape(str(e))}</code>\n"
-            "Make sure the bot is still an admin there (or re-set the channel from the panel).",
+            f"⚠️ Unable to save to the Database Channel: <code>{html.escape(str(e))}</code>\n"
+            "Make sure the bot is still an admin there, or set the channel again.",
             reply_markup=M([[B("📡 Database Channel", callback_data="adm:dbch")]]))
         return
     except TelegramError as e:
