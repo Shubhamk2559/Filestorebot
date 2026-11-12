@@ -17,7 +17,7 @@ import re
 
 import config
 
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, LinkPreviewOptions
+from telegram import InlineKeyboardMarkup as M, LinkPreviewOptions
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, TelegramError
 
@@ -25,6 +25,7 @@ from database import db
 from database.db import settings as S
 from handlers import broadcast, upload
 from utils import keyboards as K
+from utils.keyboards import B
 from utils.helpers import (admin_only, owner_only, is_admin, is_owner, extract_chat_ref,
                            extract_user_id, extract_post_id)
 
