@@ -56,7 +56,7 @@ def B(text, callback_data):
 NOPREVIEW = LinkPreviewOptions(is_disabled=True)
 PAGE = 8
 MAX_RANGE = 10000
-TEMP_KEYS = ("state", "batch_ids", "batch_status", "range_first", "bc_msg", "short_tmp")
+TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "short_tmp")
 
 ACTIONS = {}
 STATES = {}
@@ -1199,6 +1199,7 @@ async def a_batchstart(update, context, args):
     context.user_data.update(
         state="batch",
         batch_ids=[],
+        batch_token=db.new_token(),   # same token is written in every file's backup caption code
         batch_status=(q.message.chat_id, q.message.message_id),
     )
 
@@ -1225,6 +1226,7 @@ async def a_batchdone(update, context, args):
         ids,
         update.effective_user.id,
         f"Batch ({len(ids)} files)",
+        token=context.user_data.get("batch_token"),
     )
 
     for k in TEMP_KEYS:
