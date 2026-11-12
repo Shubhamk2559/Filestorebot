@@ -97,13 +97,13 @@ async def check_callback(update, context):
     q, user = update.callback_query, update.callback_query.from_user
     token = q.data.split(":", 1)[1]
     if not is_admin(user.id) and await db.is_banned(user.id):
-        await q.answer("🚫 You are banned.", show_alert=True)
+        await q.answer("🚫 You are banned from using this bot.", show_alert=True)
         return
     if not is_admin(user.id):
         missing = await get_missing(context.bot, user.id)
         if missing:
             names = ", ".join(c["title"] for c in missing)[:150]
-            await q.answer(f"❌ You haven't joined: {names}", show_alert=True)
+            await q.answer(f"❌ Please join first: {names}", show_alert=True)
             return
     await q.answer()
     try:
@@ -154,7 +154,7 @@ async def deliver(bot, chat_id: int, link: dict):
     """One link, two behaviours - chosen by the admin (Delivery Mode): forward the files, or stream them."""
     channel = S.get("db_channel")
     if not channel:
-        await call(bot.send_message, chat_id, "⚠️ The bot is not configured yet. Please try later.")
+        await call(bot.send_message, chat_id, "⚠️ The bot is not set up yet. Please try again later.")
         return
     if S.get("delivery_mode") == "stream":
         if streamer.ready:
@@ -162,8 +162,8 @@ async def deliver(bot, chat_id: int, link: dict):
                 return
         else:  # admin chose streaming but the engine is down: don't leave users empty-handed
             await notify_owner(bot, "stream_down",
-                               f"⚠️ Delivery mode is Stream but the streaming engine is off ({streamer.error}). "
-                               "Falling back to normal forwarding.")
+                               f"⚠️ Streaming engine is off ({streamer.error}). "
+                               "Files are being forwarded instead.")
     await deliver_forward(bot, chat_id, link, channel)
 
 
@@ -204,7 +204,7 @@ async def deliver_forward(bot, chat_id: int, link: dict, channel: dict):
             notice = await call(
                 bot.send_message, chat_id,
                 f"⏳ These files will be deleted in <b>{minutes} minute{'s' if minutes != 1 else ''}</b>. "
-                "Forward or save them now!", parse_mode=ParseMode.HTML)
+                "Please save them before then.", parse_mode=ParseMode.HTML)
             sent.append(notice.message_id)
         except TelegramError:
             pass
@@ -277,5 +277,5 @@ async def _unavailable(bot, chat_id):
 async def _config_problem(bot, channel, err):
     await notify_owner(
         bot, "dbch",
-        f"⚠️ I can't read from the Database Channel \"{channel.get('title')}\" ({channel['id']}): {err}\n"
-        "Make sure the bot is an admin there, or set the channel again from the panel.")
+        f"⚠️ Unable to read the Database Channel \"{channel.get('title')}\" ({channel['id']}): {err}\n"
+        "Make sure the bot is an admin there, or set the channel again.")
