@@ -1,5 +1,10 @@
 """utils/keyboards.py - reusable inline keyboards. Callback data: "adm:<action>:<arg>..."."""
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup as M
+
+
+def B(text, callback_data=None, url=None):
+    """PTB's 2nd positional arg is `url`, so always pass callback_data explicitly."""
+    return InlineKeyboardButton(text, callback_data=callback_data, url=url)
 
 
 def cancel():
