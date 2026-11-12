@@ -13,7 +13,7 @@ from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandl
 
 import config
 from database import db
-from handlers import admin, start
+from handlers import admin, start, upload
 from utils.streamer import streamer
 from utils.web import start_web_server
 from utils.scheduler import autodelete_loop
@@ -68,6 +68,8 @@ def main():
     app.add_handler(CallbackQueryHandler(admin.callback_router, pattern=r"^adm:"))
     app.add_handler(CallbackQueryHandler(start.check_callback, pattern=r"^chk:"))
     app.add_handler(MessageHandler(private & ~filters.COMMAND, admin.message_router))
+    # Files forwarded into the Database Channel are re-linked from their caption code (disaster recovery)
+    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST & ~filters.COMMAND, upload.channel_restore))
     app.add_error_handler(on_error)
 
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
