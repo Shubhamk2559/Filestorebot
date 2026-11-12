@@ -44,9 +44,9 @@ async def _is_member(bot, user_id: int, ch: dict) -> bool:
             log.warning("Force-sub check failed for %s: %s", ch["id"], e)
             await notify_owner(
                 bot, f"fsub{ch['id']}",
-                f"⚠️ Force-sub problem with \"{ch.get('title')}\" ({ch['id']}): {e}\n"
-                "Make sure the bot is an admin there, or remove the channel from the panel. "
-                "Users are NOT blocked meanwhile.")
+                f"⚠️ Force-Sub check failed for \"{ch.get('title')}\" ({ch['id']}): {e}\n"
+                "Make sure the bot is an admin there, or remove the channel. "
+                "Users are not blocked in the meantime.")
             return True
         except TelegramError as e:
             log.warning("Membership check error: %s", e)
