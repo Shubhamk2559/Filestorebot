@@ -7,7 +7,7 @@ import logging
 
 from telegram import Update
 from telegram.constants import ParseMode
-from telegram.error import NetworkError
+from telegram.error import Conflict, NetworkError
 from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandler,
                           ContextTypes, Defaults, MessageHandler, filters)
 
@@ -39,6 +39,11 @@ async def post_shutdown(app):
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    if isinstance(context.error, Conflict):
+        # Another instance is polling with the same token (old deploy still shutting down,
+        # a local run, or another server). Polling keeps retrying and recovers once it stops.
+        log.warning("Conflict: another instance is using this BOT_TOKEN - stop it (only one may run)")
+        return
     if isinstance(context.error, NetworkError):
         log.warning("Network error: %s", context.error)  # transient, polling retries by itself
         return
