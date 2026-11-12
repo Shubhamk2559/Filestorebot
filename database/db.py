@@ -27,7 +27,7 @@ pending_col = db["pending_deletes"]
 
 DEFAULT_CAPTION = (
     "👋 Hello {mention}!\n\n"
-    "<b>Join all the channels below to watch the video</b>,\n"
+    "Please join all the channels below to access your files,\n"
     "then tap <b>Verify</b>."
 )
 
