@@ -122,8 +122,9 @@ async def check_callback(update, context):
 
 
 # ------------------------------------------------------------------ delivery
-async def _copy_one(bot, chat_id, from_chat, mid, protect, caption):
-    """copy_message with flood-wait retry; drops the caption override if Telegram rejects it."""
+async def _copy_one(bot, chat_id, from_chat, mid, protect, caption, safe=False):
+    """copy_message with flood-wait retry; drops the caption override if Telegram rejects it.
+    safe=True: the original caption holds the hidden backup code, so on failure send NO caption instead."""
     kw = dict(chat_id=chat_id, from_chat_id=from_chat, message_id=mid, protect_content=protect)
     if caption is not None:
         kw.update(caption=caption, parse_mode=ParseMode.HTML)
@@ -135,8 +136,14 @@ async def _copy_one(bot, chat_id, from_chat, mid, protect, caption):
         except BadRequest as e:
             if "caption" in kw and "chat not found" not in str(e).lower() \
                     and "message to copy not found" not in str(e).lower():
-                kw.pop("caption")
-                kw.pop("parse_mode", None)
+                if safe and kw["caption"] == "":
+                    raise
+                if safe:
+                    kw["caption"] = ""
+                    kw.pop("parse_mode", None)
+                else:
+                    kw.pop("caption")
+                    kw.pop("parse_mode", None)
                 continue
             raise
     return await bot.copy_message(**kw)
@@ -151,41 +158,81 @@ def _caption_override():
 
 
 async def deliver(bot, chat_id: int, link: dict):
-    """One link, two behaviours - chosen by the admin (Delivery Mode): forward the files, or stream them."""
+    """Daily-limit gate (10 files per user per day, admins exempt), then deliver."""
+    ids = [i for i in link["ids"] if i]          # slots not restored yet are None
+    token = link["_id"]
+    if not ids:
+        await _unavailable(bot, chat_id)
+        return
+    if is_admin(chat_id):
+        await _deliver(bot, chat_id, {**link, "ids": ids})
+        return
+
+    limit = db.limit_value()
+    start = await db.get_progress(chat_id, token)      # a big link is continued where the user stopped
+    if start >= len(ids):
+        start = 0
+    granted = await db.reserve_quota(chat_id, len(ids) - start)
+    if granted <= 0:
+        await call(bot.send_message, chat_id,
+                   f"🚫 <b>Daily limit reached</b>\n\nYou can get only <b>{limit}</b> files per day. "
+                   "Please come back tomorrow (resets at 12:00 AM IST).", parse_mode=ParseMode.HTML)
+        return
+
+    part = ids[start:start + granted]
+    delivered = await _deliver(bot, chat_id, {**link, "ids": part})
+    await db.refund_quota(chat_id, granted - delivered)
+
+    end = start + delivered
+    await db.set_progress(chat_id, token, end if end < len(ids) else 0)
+    if end < len(ids):
+        await call(bot.send_message, chat_id,
+                   f"ℹ️ Daily limit of <b>{limit}</b> files reached. Sent {end}/{len(ids)} files of this link.\n"
+                   "Open the same link tomorrow to get the rest.", parse_mode=ParseMode.HTML)
+
+
+async def _deliver(bot, chat_id: int, link: dict) -> int:
+    """One link, two behaviours - chosen by the admin (Delivery Mode): forward the files, or stream them.
+    Returns how many files the user actually received."""
     channel = S.get("db_channel")
     if not channel:
         await call(bot.send_message, chat_id, "⚠️ The bot is not set up yet. Please try again later.")
-        return
+        return 0
     if S.get("delivery_mode") == "stream":
         if streamer.ready:
-            if await deliver_stream(bot, chat_id, link, channel):
-                return
+            n = await deliver_stream(bot, chat_id, link, channel)
+            if n is not False:
+                return n
         else:  # admin chose streaming but the engine is down: don't leave users empty-handed
             await notify_owner(bot, "stream_down",
                                f"⚠️ Streaming engine is off ({streamer.error}). "
                                "Files are being forwarded instead.")
-    await deliver_forward(bot, chat_id, link, channel)
+    return await deliver_forward(bot, chat_id, link, channel)
 
 
-async def deliver_forward(bot, chat_id: int, link: dict, channel: dict):
-    protect, caption = S.get("protect"), _caption_override()
-    sent, skipped = [], 0
+async def deliver_forward(bot, chat_id: int, link: dict, channel: dict) -> int:
+    protect, base_caption = S.get("protect"), _caption_override()
+    caps = await db.caption_overrides(link["ids"])   # original captions; the hidden backup code is never sent
+    sent, skipped, files = [], 0, 0
 
     for mid in link["ids"]:
+        caption = base_caption if base_caption is not None else caps.get(mid)
         try:
-            m = await _copy_one(bot, chat_id, channel["id"], mid, protect, caption)
+            m = await _copy_one(bot, chat_id, channel["id"], mid, protect, caption,
+                                safe=base_caption is None and mid in caps)
             sent.append(m.message_id)
+            files += 1
         except Forbidden as e:
             if any(w in str(e).lower() for w in USER_GONE):
-                return  # the user blocked the bot - nothing more to do
+                return files  # the user blocked the bot - nothing more to do
             await _config_problem(bot, channel, e)
             await _unavailable(bot, chat_id)
-            return
+            return files
         except BadRequest as e:
             if "chat not found" in str(e).lower():
                 await _config_problem(bot, channel, e)
                 await _unavailable(bot, chat_id)
-                return
+                return files
             skipped += 1  # message deleted from the DB channel -> skip it
             log.info("Skipping message %s: %s", mid, e)
         except TelegramError as e:
@@ -195,7 +242,7 @@ async def deliver_forward(bot, chat_id: int, link: dict, channel: dict):
 
     if not sent:
         await _unavailable(bot, chat_id)
-        return
+        return 0
 
     await db.inc_views(link["_id"])
     minutes = S.get("autodelete")
@@ -211,13 +258,15 @@ async def deliver_forward(bot, chat_id: int, link: dict, channel: dict):
         await db.schedule_delete(chat_id, sent, minutes)
     if skipped:
         await call(bot.send_message, chat_id, f"ℹ️ {skipped} file(s) are no longer available.")
+    return files
 
 
 STREAM_PAGE = 10  # files per message (2 buttons each, Telegram allows 100 buttons per keyboard)
 
 
-async def deliver_stream(bot, chat_id: int, link: dict, channel: dict) -> bool:
-    """Send Stream / Download buttons instead of the files. Returns False to let the caller fall back."""
+async def deliver_stream(bot, chat_id: int, link: dict, channel: dict):
+    """Send Stream / Download buttons instead of the files.
+    Returns the number of files shown, or False to let the caller fall back to forwarding."""
     token, ids = link["_id"], link["ids"]
     try:
         infos = await streamer.get_infos(channel["id"], ids)
@@ -230,7 +279,7 @@ async def deliver_stream(bot, chat_id: int, link: dict, channel: dict) -> bool:
     files = [infos[m] for m in ids if m in infos]
     if not files:
         await _unavailable(bot, chat_id)
-        return True
+        return 0
 
     sent = []
     for p in range(0, len(files), STREAM_PAGE):
@@ -252,7 +301,7 @@ async def deliver_stream(bot, chat_id: int, link: dict, channel: dict) -> bool:
             sent.append(m.message_id)
         except Forbidden as e:
             if any(w in str(e).lower() for w in USER_GONE):
-                return True
+                return len(sent)
             raise
         except TelegramError as e:
             log.warning("Stream message failed: %s", e)
@@ -264,7 +313,7 @@ async def deliver_stream(bot, chat_id: int, link: dict, channel: dict) -> bool:
         await db.schedule_delete(chat_id, sent, minutes)
     if len(files) < len(ids):
         await call(bot.send_message, chat_id, f"ℹ️ {len(ids) - len(files)} file(s) are no longer available.")
-    return True
+    return len(files)
 
 
 async def _unavailable(bot, chat_id):
