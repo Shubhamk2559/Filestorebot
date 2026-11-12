@@ -3,34 +3,34 @@ from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 
 
 def cancel():
-    return M([[B("❌ Cancel", "adm:cancel")]])
+    return M([[B("❌ Cancel", callback_data="adm:cancel")]])
 
 
 def back(to: str = "home"):
-    return M([[B("🔙 Back", f"adm:{to}")]])
+    return M([[B("🔙 Back", callback_data=f"adm:{to}")]])
 
 
 def batch_kb():
-    return M([[B("✅ Done", "adm:batchdone")], [B("❌ Cancel", "adm:cancel")]])
+    return M([[B("✅ Done", callback_data="adm:batchdone")], [B("❌ Cancel", callback_data="adm:cancel")]])
 
 
 def after_link():
-    return M([[B("🔗 My Links", "adm:links"), B("🔙 Panel", "adm:home")]])
+    return M([[B("🔗 My Links", callback_data="adm:links"), B("🔙 Panel", callback_data="adm:home")]])
 
 
 def main_panel(owner: bool):
     rows = [
-        [B("📦 Create Batch", "adm:batch"), B("🔗 My Links", "adm:links")],
-        [B("📡 Database Channel", "adm:dbch"), B("🔔 Force-Sub", "adm:fsub")],
-        [B("🖼 Start Image", "adm:simg"), B("📝 Start Caption", "adm:scap")],
-        [B("🔘 Join Buttons", "adm:btns"), B("⏱ Auto-Delete", "adm:autodel")],
-        [B("🎬 Delivery Mode", "adm:mode"), B("🛡 Protect Content", "adm:protect")],
-        [B("🏷 File Caption", "adm:fcap"), B("💸 Shortener", "adm:short")],
-        [B("📢 Broadcast", "adm:bc"), B("📊 Stats", "adm:stats")],
-        [B("🚫 Ban / Unban", "adm:ban")],
+        [B("📦 Create Batch", callback_data="adm:batch"), B("🔗 My Links", callback_data="adm:links")],
+        [B("📡 Database Channel", callback_data="adm:dbch"), B("🔔 Force-Sub", callback_data="adm:fsub")],
+        [B("🖼 Start Image", callback_data="adm:simg"), B("📝 Start Caption", callback_data="adm:scap")],
+        [B("🔘 Join Buttons", callback_data="adm:btns"), B("⏱ Auto-Delete", callback_data="adm:autodel")],
+        [B("🎬 Delivery Mode", callback_data="adm:mode"), B("🛡 Protect Content", callback_data="adm:protect")],
+        [B("🏷 File Caption", callback_data="adm:fcap"), B("💸 Shortener", callback_data="adm:short")],
+        [B("📢 Broadcast", callback_data="adm:bc"), B("📊 Stats", callback_data="adm:stats")],
+        [B("🚫 Ban / Unban", callback_data="adm:ban")],
     ]
-    last = [B("♻️ Reset Settings", "adm:reset")]
+    last = [B("♻️ Reset Settings", callback_data="adm:reset")]
     if owner:
-        last.insert(0, B("👮 Admins", "adm:admins"))
+        last.insert(0, B("👮 Admins", callback_data="adm:admins"))
     rows.append(last)
     return M(rows)
