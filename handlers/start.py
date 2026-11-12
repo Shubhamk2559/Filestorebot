@@ -9,7 +9,7 @@ Also: the "✅ I've Joined" / "Verify" callback and the file delivery routine.
 import asyncio
 import logging
 
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+from telegram import InlineKeyboardMarkup as M
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from telegram.ext import ContextTypes
@@ -17,6 +17,7 @@ from telegram.ext import ContextTypes
 from database import db
 from database.db import settings as S
 from handlers import admin
+from utils.keyboards import B
 from utils.helpers import call, is_admin, notify_owner, render_caption, retry_seconds
 from utils.membership import get_missing
 
