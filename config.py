@@ -25,6 +25,9 @@ OWNER_ID = int(_required("OWNER_ID"))
 API_ID = int(os.getenv("API_ID", "0") or 0)
 API_HASH = os.getenv("API_HASH", "")
 
+# Public https URL of this deployment, no trailing slash (e.g. https://myapp.koyeb.app). Needed for Stream/Download links.
+BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
+
 DB_NAME = os.getenv("DB_NAME", "filesharebot")
 PORT = int(os.getenv("PORT", "8080"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
