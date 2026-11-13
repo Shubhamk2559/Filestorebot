@@ -15,6 +15,7 @@ from database import db
 from database.db import settings as S
 from utils import keyboards as K
 from utils.helpers import call, notify_owner
+from utils.links import share_link
 from utils.shortener import shorten
 
 log = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ async def channel_restore(update, context):
 
 async def announce_link(context, chat_id: int, token: str, count: int, label: str):
     """Send the shareable link (plus a shortened one if the shortener is enabled)."""
-    link = f"https://t.me/{context.bot.username}?start={token}"
+    link = share_link(context.bot.username, token)
     text = (f"✅ <b>Link created</b>\n📎 {html.escape(label)} "
             f"({count} file{'s' if count != 1 else ''})\n\n🔗 <code>{link}</code>")
     short = await shorten(link)
