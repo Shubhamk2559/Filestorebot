@@ -27,7 +27,7 @@ def main_panel(owner: bool):
         [B("🎬 Delivery Mode", callback_data="adm:mode"), B("🛡 Protect Content", callback_data="adm:protect")],
         [B("🏷 File Caption", callback_data="adm:fcap"), B("💸 Shortener", callback_data="adm:short")],
         [B("📢 Broadcast", callback_data="adm:bc"), B("📊 Stats", callback_data="adm:stats")],
-        [B("🚫 Ban / Unban", callback_data="adm:ban")],
+        [B("📺 Ads (Monetag)", callback_data="adm:ads"), B("🚫 Ban / Unban", callback_data="adm:ban")],
     ]
     last = [B("♻️ Reset Settings", callback_data="adm:reset")]
     if owner:
