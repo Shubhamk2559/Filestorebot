@@ -39,6 +39,9 @@ from utils.helpers import (
     extract_chat_ref,
     extract_user_id,
     extract_post_id,
+    picker_keyboard,
+    clear_picker,
+    CANCEL_TEXT,
 )
 from utils import ads
 from utils.links import share_link
@@ -117,9 +120,16 @@ async def ask(update, context, state_name, text):
     await show(update, text, K.cancel())
 
 
+async def ask_chat(update, context, state_name, text, channel=True, group=False):
+    """Prompt + Telegram's native 'Choose a Channel' picker (no IDs to type)."""
+    await ask(update, context, state_name, text)
+    await update.effective_chat.send_message("👇 Tap the button below to choose.",
+                                             reply_markup=picker_keyboard(channel, group))
+
+
 def panel_text() -> str:
     ch, fs, ad = S.get("db_channel"), S.get("fsub_channels"), S.get("autodelete")
-    db_txt = f"<code>{ch['id']}</code>" if ch else "❌ not set"
+    db_txt = f"<b>{html.escape(ch['title'] or '')}</b>" if ch else "❌ not set"
 
     return (
         "🛠 <b>Admin Panel</b>\n\n"
@@ -158,15 +168,24 @@ async def bot_admin_status(bot, chat_id, need_post=False):
 async def resolve_channel(update, context, need_post: bool):
     """Resolve a channel from a forwarded message, ID, or username."""
     msg = update.effective_message
+
+    if msg.text and msg.text.strip() == CANCEL_TEXT:
+        context.user_data.pop("state", None)
+        await clear_picker(msg)
+        await send_panel(update, context)
+        return None
+
     ref = extract_chat_ref(msg)
 
     if ref is None:
         await msg.reply_text(
-            "⚠️ Channel not found.\n"
-            "Forward a message from the channel, or send its ID or @username.",
+            "⚠️ Please tap the <b>Choose</b> button below.",
             reply_markup=K.cancel(),
         )
         return None
+
+    if getattr(msg, "chat_shared", None) is not None:
+        await clear_picker(msg)
 
     try:
         chat = await context.bot.get_chat(ref)
@@ -287,18 +306,17 @@ async def a_dbch(update, context, args):
     cur = S.get("db_channel")
 
     cur_txt = (
-        f"<b>{html.escape(cur['title'] or '')}</b> "
-        f"(<code>{cur['id']}</code>)"
+        f"<b>{html.escape(cur['title'] or '')}</b>"
         if cur else "❌ not set"
     )
 
-    await ask(
+    await ask_chat(
         update,
         context,
         "dbch",
         f"📡 <b>Database Channel</b>\nCurrent: {cur_txt}\n\n"
-        "Forward a message from the channel, or send its ID or @username.\n"
-        "The bot must be an <b>admin</b> with permission to post.",
+        "Choose the channel where files will be stored.\n"
+        "If the bot is not an admin there, Telegram will offer to add it.",
     )
 
 
@@ -317,8 +335,7 @@ async def st_dbch(update, context):
     context.user_data.pop("state", None)
 
     await update.effective_message.reply_text(
-        f"✅ Database channel set to <b>{html.escape(chat.title or '')}</b> "
-        f"(<code>{chat.id}</code>).\n"
+        f"✅ Database channel set to <b>{html.escape(chat.title or '')}</b>.\n"
         "Uploaded files will be stored in this channel.",
         reply_markup=K.back(),
     )
@@ -458,13 +475,13 @@ async def a_fsubtoggle(update, context, args):
 
 @action("fsubadd")
 async def a_fsubadd(update, context, args):
-    await ask(
+    await ask_chat(
         update,
         context,
         "fsubadd",
         "➕ <b>Add Force-Sub Channel</b>\n\n"
-        "Forward a message from the channel, or send its ID or @username.\n"
-        "The bot must be an <b>admin</b> there.",
+        "Choose the channel users must join.\n"
+        "If the bot is not an admin there, Telegram will offer to add it.",
     )
 
 
