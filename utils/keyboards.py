@@ -25,7 +25,7 @@ def main_panel(owner: bool):
         [B("🖼 Start Image", callback_data="adm:simg"), B("📝 Start Caption", callback_data="adm:scap")],
         [B("🔘 Join Buttons", callback_data="adm:btns"), B("⏱ Auto-Delete", callback_data="adm:autodel")],
         [B("🎬 Delivery Mode", callback_data="adm:mode"), B("🛡 Protect Content", callback_data="adm:protect")],
-        [B("🏷 File Caption", callback_data="adm:fcap"), B("💸 Shortener", callback_data="adm:short")],
+        [B("🏷 File Caption", callback_data="adm:fcap")],
         [B("📢 Broadcast", callback_data="adm:bc"), B("📊 Stats", callback_data="adm:stats")],
         [B("📺 Ads (Monetag)", callback_data="adm:ads"), B("🚫 Ban / Unban", callback_data="adm:ban")],
         [B("📅 Autoposter", callback_data="adm:ap")],
