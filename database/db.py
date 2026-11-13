@@ -28,6 +28,7 @@ users_col = db["users"]
 links_col = db["links"]
 files_col = db["files"]
 pending_col = db["pending_deletes"]
+ads_col = db["ad_sessions"]      # one-time Mini App ad sessions (auto-expire)
 usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<files received today>
 
 # A user can receive at most this many files per day (admins are exempt).
@@ -63,6 +64,15 @@ DEFAULTS = {
     "shortener_url": "",
     "shortener_key": "",
     "daily_limit": 10,            # files per user per day (admins exempt)
+    # ---- Monetag rewarded ads (Telegram Mini App) - all configured from the Ads screen of the panel
+    "ads_enabled": False,
+    "ads_zone": "",               # Monetag main SDK zone id
+    "ads_sdk_url": "https://libtl.com/sdk.js",   # SDK script URL exactly as in your Monetag snippet
+    "ads_postback": True,         # server-to-server verification (Monetag postback) - strongest mode
+    "ads_secret": "",             # secret used in the postback URL (auto-generated)
+    "ads_block_adblock": True,    # refuse users running an ad blocker / ad-blocking DNS
+    "ads_tries": 3,               # no-fill tries before files are given without an ad
+    "ads_last_postback": 0,
 }
 
 
@@ -84,7 +94,7 @@ class SettingsCache:
         self._data[key] = value
         await settings_col.update_one({"_id": "main"}, {"$set": {key: value}}, upsert=True)
 
-    async def reset(self, keep=("admins", "db_channel")):
+    async def reset(self, keep=("admins", "db_channel", "ads_secret")):
         """Restore defaults but keep admins and the database channel."""
         kept = {k: self._data.get(k) for k in keep}
         fresh = copy.deepcopy(DEFAULTS)
@@ -104,6 +114,8 @@ async def init_db():
     await files_col.create_index("msg_id")
     await files_col.create_index("code")
     await usage_col.create_index("expire_at", expireAfterSeconds=0)  # old counters clean themselves
+    await ads_col.create_index("expire_at", expireAfterSeconds=0)
+    await ads_col.create_index([("uid", 1), ("status", 1)])
     await settings.load()
 
 
