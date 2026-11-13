@@ -1,7 +1,7 @@
 """
 utils/membership.py
 Force-subscribe check for MANY channels using get_chat_member with a small cache.
- * Only positive results are cached (120 s) so the "I've Joined" button re-checks instantly.
+ * Only positive results are cached (300 s) so the "I've Joined" button re-checks instantly.
  * If the bot lost admin rights / a channel was deleted, users are NOT blocked;
    the owner gets a throttled warning instead.
 """
@@ -15,7 +15,7 @@ from database.db import settings as S
 from utils.helpers import notify_owner, retry_seconds
 
 log = logging.getLogger(__name__)
-CACHE_TTL = 120
+CACHE_TTL = 300
 _cache: dict = {}  # (user_id, chat_id) -> expiry timestamp
 
 
