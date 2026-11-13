@@ -9,6 +9,7 @@ Also: the "✅ I've Joined" / "Verify" callback and the file delivery routine.
 import asyncio
 import html
 import logging
+import time
 
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 from telegram.constants import ParseMode
@@ -26,6 +27,9 @@ import config
 
 log = logging.getLogger(__name__)
 USER_GONE = ("blocked", "deactivated", "can't initiate", "user is deleted")
+
+COOLDOWN_SECONDS = 5          # gap between two link opens per user (admins exempt)
+_last_open: dict = {}         # user_id -> monotonic time of the last accepted link open
 
 
 # ------------------------------------------------------------------ /start
@@ -113,7 +117,7 @@ async def check_callback(update, context):
         pass
     if not token:
         await call(context.bot.send_message, q.message.chat_id,
-                   f"✅ Verified! Now open a file link to receive your files.\n\n📊 Daily limit: {db.limit_value()} files per user per day.")
+                   f"✅ Verified! Now open a file link to receive your files.\n\n📊 Daily limit: {db.limit_value()} links per user per day (each link gives all its files).")
         return
     link = await db.get_link(token)
     if not link:
@@ -160,24 +164,33 @@ def _caption_override():
 
 async def _limit_reached(bot, chat_id: int):
     await call(bot.send_message, chat_id,
-               f"🚫 <b>Daily limit reached</b>\n\nYou can get only <b>{db.limit_value()}</b> files per day. "
+               f"🚫 <b>Daily limit reached</b>\n\nYou can open only <b>{db.limit_value()}</b> links per day. "
                "Please come back tomorrow (resets at 12:00 AM IST).", parse_mode=ParseMode.HTML)
 
 
 async def request_access(bot, chat_id: int, link: dict):
-    """Entry point for a user who passed force-subscribe: daily limit -> Monetag ad gate -> files."""
-    if not is_admin(chat_id) and await db.used_today(chat_id) >= db.limit_value():
-        await _limit_reached(bot, chat_id)                      # don't make them watch an ad for nothing
-        return
+    """Entry point for a user who passed force-subscribe: cooldown -> daily limit -> Monetag ad gate -> files."""
+    if not is_admin(chat_id):
+        wait = COOLDOWN_SECONDS - (time.monotonic() - _last_open.get(chat_id, 0.0))
+        if wait > 0:
+            await call(bot.send_message, chat_id,
+                       f"⏳ Please wait <b>{int(wait) + 1}</b> second(s) before opening the next link.",
+                       parse_mode=ParseMode.HTML)
+            return
+        _last_open[chat_id] = time.monotonic()
+        if len(_last_open) > 20000:                              # keep memory bounded
+            _last_open.clear()
+        if await db.used_today(chat_id) >= db.limit_value():
+            await _limit_reached(bot, chat_id)                  # don't make them watch an ad for nothing
+            return
     if await ads.gate(bot, chat_id, link):                      # Mini App button sent; files follow after the ad
         return
     await deliver(bot, chat_id, link)
 
 
 async def deliver(bot, chat_id: int, link: dict):
-    """Daily-limit gate (10 files per user per day, admins exempt), then deliver."""
+    """Daily-limit gate (10 LINKS per user per day, admins exempt). One link = 1 count, however many files it has."""
     ids = [i for i in link["ids"] if i]          # slots not restored yet are None
-    token = link["_id"]
     if not ids:
         await _unavailable(bot, chat_id)
         return
@@ -186,26 +199,20 @@ async def deliver(bot, chat_id: int, link: dict):
         return
 
     limit = db.limit_value()
-    start = await db.get_progress(chat_id, token)      # a big link is continued where the user stopped
-    if start >= len(ids):
-        start = 0
-    granted = await db.reserve_quota(chat_id, len(ids) - start)
+    granted = await db.reserve_quota(chat_id, 1)       # 1 link = 1 count
     if granted <= 0:
         await _limit_reached(bot, chat_id)
         return
 
-    part = ids[start:start + granted]
-    delivered = await _deliver(bot, chat_id, {**link, "ids": part})
-    await db.refund_quota(chat_id, granted - delivered)
-
-    end = start + delivered
-    await db.set_progress(chat_id, token, end if end < len(ids) else 0)
+    delivered = await _deliver(bot, chat_id, {**link, "ids": ids})   # ALL files of the link
+    if delivered <= 0:
+        await db.refund_quota(chat_id, 1)              # nothing was received -> don't burn a count
+    _last_open[chat_id] = time.monotonic()             # cooldown starts after delivery finishes
 
     used = await db.used_today(chat_id)
-    text = f"📊 <b>Daily limit:</b> {used}/{limit} files used today · {max(0, limit - used)} left"
-    if end < len(ids):
-        text += (f"\n\nℹ️ Limit reached. Sent {end}/{len(ids)} files of this link. "
-                 "Open the same link tomorrow (after 12:00 AM IST) to get the rest.")
+    text = f"📊 <b>Daily limit:</b> {used}/{limit} links used today · {max(0, limit - used)} left"
+    if used >= limit:
+        text += "\n\n🚫 Limit reached. Come back tomorrow (resets at 12:00 AM IST)."
     await call(bot.send_message, chat_id, text, parse_mode=ParseMode.HTML)
 
 
