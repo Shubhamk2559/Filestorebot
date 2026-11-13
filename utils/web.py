@@ -1,6 +1,7 @@
 """
 utils/web.py - aiohttp server.
 
+  GET /ad, POST /api/ad/*, GET /monetag/postback   Monetag rewarded-ad Mini App (utils/ads.py)
   GET /, /health          health checks (Koyeb / Render / Heroku / VPS)
   GET|HEAD /dl/<token>/<msg_id>[?d=1]
                           streams one stored file. Range supported (video seeking, resume).
@@ -17,6 +18,7 @@ from aiohttp import web
 
 from database import db
 from database.db import settings as S
+from utils import ads
 from utils.streamer import RangeError, parse_range, streamer
 
 log = logging.getLogger(__name__)
@@ -95,7 +97,7 @@ async def stream_file(request: web.Request) -> web.StreamResponse:
     return resp
 
 
-async def start_web_server(port: int):
+async def start_web_server(port: int, bot=None):
     async def health(request):
         try:
             await db.db.command("ping")
@@ -107,6 +109,8 @@ async def start_web_server(port: int):
         return web.Response(text="OK")
 
     app = web.Application()
+    app["bot"] = bot
+    ads.setup_routes(app)   # /ad (Mini App), /api/ad/*, /monetag/postback
     app.router.add_get("/", root)
     app.router.add_get("/health", health)
     app.router.add_route("GET", "/dl/{token}/{msg_id}", stream_file)
