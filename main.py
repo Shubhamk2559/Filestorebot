@@ -14,10 +14,12 @@ from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandl
 import config
 from database import db
 from handlers import admin, start, upload
+from handlers import autoposter as _autoposter  # noqa: F401  (registers the Autoposter panel screens)
 from utils.links import register_bot
 from utils.streamer import streamer
 from utils.web import start_web_server
 from utils.scheduler import autodelete_loop
+from utils.autoposter import autopost_loop
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=config.LOG_LEVEL)
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't log every Bot API call (leaks the token)
@@ -29,6 +31,7 @@ async def post_init(app):
     app.bot_data["health"] = await start_web_server(config.PORT, app.bot)   # /health + /dl/<token>/<id> streaming
     await streamer.start()                               # MTProto engine (needs API_ID, API_HASH, BASE_URL)
     app.bot_data["gc"] = asyncio.create_task(autodelete_loop(app.bot))
+    app.bot_data["ap"] = asyncio.create_task(autopost_loop(app.bot))     # Autoposter scheduler
     app.bot_data["reg"] = asyncio.create_task(register_bot(app.bot.username))   # links -> this bot (Cloudflare Worker)
     log.info("Bot @%s started (web on :%s, streaming %s)", app.bot.username, config.PORT,
              "ON" if streamer.ready else f"OFF ({streamer.error})")
@@ -36,9 +39,10 @@ async def post_init(app):
 
 async def post_shutdown(app):
     await streamer.stop()
-    task = app.bot_data.get("gc")
-    if task:
-        task.cancel()
+    for key in ("gc", "ap"):
+        task = app.bot_data.get(key)
+        if task:
+            task.cancel()
     runner = app.bot_data.get("health")
     if runner:
         await runner.cleanup()
