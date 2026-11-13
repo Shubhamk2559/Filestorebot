@@ -166,12 +166,11 @@ async def _limit_reached(bot, chat_id: int):
 
 async def request_access(bot, chat_id: int, link: dict):
     """Entry point for a user who passed force-subscribe: daily limit -> Monetag ad gate -> files."""
-    if not is_admin(chat_id):
-        if await db.used_today(chat_id) >= db.limit_value():   # don't make them watch an ad for nothing
-            await _limit_reached(bot, chat_id)
-            return
-        if await ads.gate(bot, chat_id, link):                  # Mini App button sent; files follow after the ad
-            return
+    if not is_admin(chat_id) and await db.used_today(chat_id) >= db.limit_value():
+        await _limit_reached(bot, chat_id)                      # don't make them watch an ad for nothing
+        return
+    if await ads.gate(bot, chat_id, link):                      # Mini App button sent; files follow after the ad
+        return
     await deliver(bot, chat_id, link)
 
 
