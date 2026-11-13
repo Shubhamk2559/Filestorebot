@@ -25,7 +25,7 @@ log = logging.getLogger("bot")
 
 async def post_init(app):
     await db.init_db()                                   # connect, indexes, load cached settings
-    app.bot_data["health"] = await start_web_server(config.PORT)   # /health + /dl/<token>/<id> streaming
+    app.bot_data["health"] = await start_web_server(config.PORT, app.bot)   # /health + /dl/<token>/<id> streaming
     await streamer.start()                               # MTProto engine (needs API_ID, API_HASH, BASE_URL)
     app.bot_data["gc"] = asyncio.create_task(autodelete_loop(app.bot))
     log.info("Bot @%s started (web on :%s, streaming %s)", app.bot.username, config.PORT,
