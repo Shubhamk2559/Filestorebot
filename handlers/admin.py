@@ -123,8 +123,15 @@ async def ask(update, context, state_name, text):
 async def ask_chat(update, context, state_name, text, channel=True, group=False):
     """Prompt + Telegram's native 'Choose a Channel' picker (no IDs to type)."""
     await ask(update, context, state_name, text)
-    await update.effective_chat.send_message("👇 Tap the button below to choose.",
-                                             reply_markup=picker_keyboard(channel, group))
+    try:
+        await update.effective_chat.send_message("👇 Tap the button below to choose.",
+                                                 reply_markup=picker_keyboard(channel, group))
+    except Exception as e:  # never fail silently: show the reason, typed input still works
+        log.exception("Chat picker failed")
+        await update.effective_chat.send_message(
+            f"⚠️ Picker button could not be shown: <code>{html.escape(type(e).__name__ + ': ' + str(e))}</code>\n\n"
+            "You can still forward a message from the channel, or send its @username / ID.",
+            reply_markup=K.cancel())
 
 
 def panel_text() -> str:
