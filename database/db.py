@@ -11,7 +11,6 @@ Collections
   ap_channels     Autoposter target channels/groups (timings, ON/OFF)
   ap_posts        Autoposter posts (thumbnail + share-link token + posted flag)
 """
-import asyncio
 import copy
 import datetime as dt
 import re
@@ -20,10 +19,22 @@ import time
 from zoneinfo import ZoneInfo
 
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 import config
 
-_client = AsyncIOMotorClient(config.MONGO_URI, serverSelectionTimeoutMS=15000)
+_client = AsyncIOMotorClient(
+    config.MONGO_URI,
+    serverSelectionTimeoutMS=15000,
+    connectTimeoutMS=10000,
+    socketTimeoutMS=30000,
+    maxPoolSize=50,          # many users at once -> enough parallel connections
+    minPoolSize=3,           # keep a few warm so the first user after idle is not slow
+    maxIdleTimeMS=120000,
+    retryWrites=True,
+    retryReads=True,
+)
 db = _client[config.DB_NAME]
 settings_col = db["settings"]
 users_col = db["users"]
@@ -133,6 +144,16 @@ async def add_user(user_id: int):
         {"$set": {"blocked": False}, "$setOnInsert": {"joined": time.time(), "banned": False}},
         upsert=True,
     )
+
+
+async def touch_user(user_id: int) -> bool:
+    """Register / refresh the user in ONE round trip. Returns True if the user is banned."""
+    doc = await users_col.find_one_and_update(
+        {"_id": user_id},
+        {"$set": {"blocked": False}, "$setOnInsert": {"joined": time.time(), "banned": False}},
+        upsert=True, projection={"banned": 1}, return_document=ReturnDocument.BEFORE,
+    )
+    return bool(doc and doc.get("banned"))
 
 
 async def is_banned(user_id: int) -> bool:
@@ -310,9 +331,6 @@ async def remove_pending(doc_id):
 
 
 # ---------------------------------------------------------------- daily limit (per user)
-_quota_locks: dict = {}
-
-
 def _today() -> str:
     return dt.datetime.now(LIMIT_TZ).strftime("%Y-%m-%d")
 
@@ -329,27 +347,42 @@ def limit_value() -> int:
         return DAILY_LIMIT
 
 
-async def reserve_quota(user_id: int, wanted: int) -> int:
-    """Atomically take up to `wanted` links from today's allowance. Returns how many were granted (0 = used up)."""
-    lock = _quota_locks.setdefault(user_id, asyncio.Lock())
-    async with lock:
-        key = f"{user_id}:{_today()}"
-        doc = await usage_col.find_one({"_id": key}, {"used": 1})
-        used = (doc or {}).get("used", 0)
-        granted = max(0, min(wanted, limit_value() - used))
-        if granted:
-            await usage_col.update_one(
-                {"_id": key},
-                {"$inc": {"used": granted}, "$set": {"expire_at": _next_midnight() + dt.timedelta(days=1)}},
-                upsert=True,
-            )
-        return granted
+async def claim_quota(user_id: int):
+    """Atomically take ONE link from today's allowance (no in-process locks, safe even with several workers).
+    Returns (granted 0/1, used_after)."""
+    limit = limit_value()
+    if limit <= 0:
+        return 0, 0
+    key = f"{user_id}:{_today()}"
+    expire = _next_midnight() + dt.timedelta(days=1)
+    for _ in range(3):
+        doc = await usage_col.find_one_and_update(
+            {"_id": key, "used": {"$lt": limit}},
+            {"$inc": {"used": 1}, "$set": {"expire_at": expire}},
+            projection={"used": 1}, return_document=ReturnDocument.AFTER)
+        if doc:
+            return 1, int(doc["used"])
+        try:
+            await usage_col.insert_one({"_id": key, "used": 1, "expire_at": expire})
+            return 1, 1
+        except DuplicateKeyError:
+            cur = await usage_col.find_one({"_id": key}, {"used": 1})
+            if cur and int(cur.get("used", 0)) >= limit:
+                return 0, int(cur["used"])
+            # else: we raced with the very first insert of the day -> try the update again
+    return 0, limit
+
+
+async def reserve_quota(user_id: int, wanted: int = 1) -> int:
+    """Kept for compatibility: 1 link = 1 count."""
+    granted, _ = await claim_quota(user_id)
+    return granted
 
 
 async def refund_quota(user_id: int, n: int):
     """Give back a link count that was reserved but could not be delivered."""
     if n > 0:
-        await usage_col.update_one({"_id": f"{user_id}:{_today()}"}, {"$inc": {"used": -n}})
+        await usage_col.update_one({"_id": f"{user_id}:{_today()}", "used": {"$gte": n}}, {"$inc": {"used": -n}})
 
 
 # ---------------------------------------------------------------- per-link progress (for links bigger than the daily limit)
