@@ -116,10 +116,12 @@ def picker_keyboard(channel: bool = True, group: bool = False):
     ch_rights = ChatAdministratorRights(
         is_anonymous=False, can_manage_chat=True, can_delete_messages=False, can_manage_video_chats=False,
         can_restrict_members=False, can_promote_members=False, can_change_info=False,
+        can_post_stories=False, can_edit_stories=False, can_delete_stories=False,
         can_invite_users=True, can_post_messages=True)
     gr_rights = ChatAdministratorRights(
         is_anonymous=False, can_manage_chat=True, can_delete_messages=False, can_manage_video_chats=False,
-        can_restrict_members=False, can_promote_members=False, can_change_info=False, can_invite_users=True)
+        can_restrict_members=False, can_promote_members=False, can_change_info=False,
+        can_post_stories=False, can_edit_stories=False, can_delete_stories=False, can_invite_users=True)
     rows = []
     if channel:
         rows.append([KeyboardButton("📢 Choose a Channel", request_chat=KeyboardButtonRequestChat(
