@@ -146,14 +146,14 @@ def _plain_len(h: str) -> int:
 
 
 def render_caption(tpl: str, cap_html: str) -> str:
-    """Fill the channel's caption template. {caption} = the post's own caption; no {caption} = a fixed caption."""
-    tpl = (tpl or "").strip() or "{caption}"
-    out = tpl.replace("{caption}", cap_html)
-    if _plain_len(out) <= CAPTION_MAX:
-        return out
-    plain = html.unescape(re.sub(r"<[^>]+>", "", cap_html))
-    room = max(0, CAPTION_MAX - _plain_len(tpl.replace("{caption}", "")))
-    return tpl.replace("{caption}", html.escape(plain[:room]))
+    """ONE fixed caption for every post, exactly as the admin wrote it (no placeholder, the post's own
+    caption is NOT mixed in). Only if no fixed caption is set, the post's own caption is used."""
+    tpl = (tpl or "").replace("{caption}", "").strip()
+    if not tpl:
+        return cap_html
+    if _plain_len(tpl) <= CAPTION_MAX:
+        return tpl
+    return tpl[:CAPTION_MAX]
 
 
 # ------------------------------------------------------------------ storing into the Database Channel
