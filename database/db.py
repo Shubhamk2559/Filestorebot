@@ -75,9 +75,6 @@ DEFAULTS = {
     "protect": False,             # protect_content on delivered files (forward mode only)
     "custom_caption": "",         # HTML, replaces original caption when set
     "remove_caption": False,      # strip original caption
-    "shortener_enabled": False,
-    "shortener_url": "",
-    "shortener_key": "",
     "daily_limit": 10,            # links per user per day (admins exempt)
     # ---- Monetag rewarded ads (Telegram Mini App) - all configured from the Ads screen of the panel
     "ads_enabled": False,
