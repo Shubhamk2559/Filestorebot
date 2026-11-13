@@ -137,13 +137,13 @@ async def show_cb(update, cid: int, note: str = ""):
     if not ch:
         await show(update, "⚠️ Channel not found.", K.back("ap"))
         return
-    tpl = ch.get("cap_tpl") or "{caption}"
+    tpl = (ch.get("cap_tpl") or "").replace("{caption}", "").strip()
     btn = ch.get("btn") or AP.DEFAULT_BTN
     await show(update,
                f"{note}🎨 <b>Caption &amp; Button</b> — {html.escape(ch['title'])}\n\n"
-               f"📝 Caption:\n<code>{html.escape(tpl)}</code>\n"
+               f"📝 Fixed caption:\n{tpl or '— not set (each post uses its own caption) —'}\n\n"
                f"🔘 Button: <b>{html.escape(btn)}</b>\n\n"
-               "Applies to every post of this channel (also the ones already created).",
+               "This one fixed caption is used on every post of this channel (also the ones already created).",
                M([[B("📝 Edit Caption", f"adm:apcap:{cid}"), B("🔘 Edit Button", f"adm:apbtn:{cid}")],
                   [B("♻️ Reset to default", f"adm:apcbr:{cid}")],
                   [B("🔙 Back", f"adm:apc:{cid}")]]))
@@ -165,11 +165,9 @@ async def a_apcbr(update, context, args):
 async def a_apcap(update, context, args):
     context.user_data["ap_cid"] = int(args[0])
     await ask(update, context, "ap_cap",
-              "📝 <b>Post caption</b>\n\nSend the caption text (bold / italic / links work).\n"
-              "Write <code>{caption}</code> where the post's own caption should go, e.g.\n"
-              "<code>🔥 {caption}\n\n👇 Download below</code>\n\n"
-              "Without <code>{caption}</code> every post gets exactly this text.\n"
-              "Send <code>-</code> to use only the post's own caption.")
+              "📝 <b>Fixed post caption</b>\n\nSend the full caption once (bold / italic / links work).\n"
+              "Every post of this channel will get exactly this text - nothing else is added.\n"
+              "Send <code>-</code> to remove it (then each post uses its own caption).")
 
 
 @state("ap_cap")
@@ -180,7 +178,7 @@ async def st_ap_cap(update, context):
         await msg.reply_text("⚠️ Send the caption as text.", reply_markup=K.cancel())
         return
     tpl = "" if msg.text.strip() == "-" else msg.text_html.strip()
-    if AP._plain_len(tpl.replace("{caption}", "")) > AP.CAPTION_MAX - 100:
+    if AP._plain_len(tpl) > AP.CAPTION_MAX:
         await msg.reply_text("⚠️ Too long (Telegram caption limit is 1024).", reply_markup=K.cancel())
         return
     await db.ap_set(cid, cap_tpl=tpl)
