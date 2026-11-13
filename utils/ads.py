@@ -44,7 +44,7 @@ SESSION_TTL = 30 * 60        # seconds a gate stays valid
 INIT_DATA_MAX_AGE = 2 * 3600  # Telegram initData freshness
 MAX_ATTEMPTS = 8             # ad attempts per session (user closing ads early also counts)
 MIN_AD_SECONDS = 4           # an ad that "finished" faster than this did not really play
-ATTEMPT_GAP = 2              # minimum seconds between two attempts
+ATTEMPT_GAP = 1              # minimum seconds between two attempts
 FALLBACK_DAILY = 3           # max no-fill fallbacks per user per day
 NOFILL = {"empty feed", "timeout", "network error", "ad is not ready", "failed to open pop",
           "failed to verify the ad show", "empty zone id"}
@@ -59,6 +59,7 @@ PROBES = [
 
 _tasks: set = set()
 _rate: dict = {}
+_seen: dict = {}   # session id -> asyncio.Event, set the moment the Monetag postback confirms the ad
 
 
 # ------------------------------------------------------------------ settings helpers
@@ -183,7 +184,7 @@ def _limited(uid: int) -> bool:
     _rate[uid] = hits
     if len(_rate) > 20000:
         _rate.clear()
-    return len(hits) > 90
+    return len(hits) > 240
 
 
 async def _auth(request):
@@ -252,6 +253,14 @@ async def api_attempt(request):
     if _closed(s):
         return _reply(ok=False, state="closed")
     now = time.time()
+    if "blocked" in body:                                     # probe result sent together with the attempt (1 round trip less)
+        blocked = bool(body.get("blocked"))
+        await db.ads_col.update_one({"_id": s["_id"]},
+                                    {"$set": {"blocked": blocked, "probe_at": now,
+                                              "probe_detail": str(body.get("detail", ""))[:80]}})
+        s["blocked"], s["probe_at"] = blocked, now
+        if blocked:
+            await bump("blocked")
     if S.get("ads_block_adblock") and not _clean_probe(s):
         return _reply(ok=False, state="blocked")          # no clean probe on record -> no ad, no files
     if s["attempts"] >= MAX_ATTEMPTS:
@@ -283,10 +292,30 @@ async def api_shown(request):
 
 
 async def api_status(request):
+    """wait=1 -> hold the request open (up to ~6s) and answer the instant the postback confirms the ad."""
     body, s = await _auth(request)
     if _closed(s):
         return _reply(state="closed")
-    return _reply(state="ready" if _verified(s) else "verifying")
+    if _verified(s):
+        return _reply(state="ready")
+    if not body.get("wait"):
+        return _reply(state="verifying")
+    ev = _seen.setdefault(s["_id"], asyncio.Event())
+    try:
+        for _ in range(4):                                    # DB re-check every 1.5s also covers a postback on another instance
+            fresh = await db.ads_col.find_one({"_id": s["_id"]})
+            if not fresh or _closed(fresh):
+                return _reply(state="closed")
+            if _verified(fresh):
+                return _reply(state="ready")
+            try:
+                await asyncio.wait_for(ev.wait(), 1.5)
+            except asyncio.TimeoutError:
+                pass
+            ev.clear()
+        return _reply(state="verifying")
+    finally:
+        _seen.pop(s["_id"], None)
 
 
 async def api_fail(request):
@@ -383,11 +412,20 @@ async def postback(request):
                 {"_id": sid, "status": "open"},
                 {"$set": {"ad_seen": True, "ad_value": q.get("reward_event_type", "")[:20],
                           "ad_seen_at": time.time()}})
+            ev = _seen.get(sid)
+            if ev:
+                ev.set()                                   # wake the Mini App's waiting status call right now
     return web.Response(text="ok")   # always 2xx for a valid secret so Monetag doesn't keep retrying
 
 
+def _boot_json() -> str:
+    return json.dumps({"zone": zone(), "sdk": sdk_url(), "tries": int(S.get("ads_tries") or 3),
+                       "strict": bool(S.get("ads_block_adblock")), "postback": bool(S.get("ads_postback")),
+                       "probes": PROBES}).replace("</", "<\\/")
+
+
 async def page(request):
-    return web.Response(text=PAGE, content_type="text/html", charset="utf-8", headers={
+    return web.Response(text=PAGE.replace("__BOOT__", _boot_json()), content_type="text/html", charset="utf-8", headers={
         "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})
 
 
