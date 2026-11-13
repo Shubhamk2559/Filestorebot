@@ -35,3 +35,6 @@ WORKER_SECRET = os.getenv("WORKER_SECRET", "").strip()
 DB_NAME = os.getenv("DB_NAME", "filesharebot")
 PORT = int(os.getenv("PORT", "8080"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# Storage quota of your MongoDB plan in MB (Atlas free M0 = 512) - used for the "storage left" bar in Stats
+MONGO_LIMIT_MB = float(os.getenv("MONGO_LIMIT_MB", "512"))
