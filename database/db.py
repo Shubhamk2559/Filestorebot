@@ -417,6 +417,17 @@ async def ap_delete_post(token: str):
     await ap_posts_col.delete_one({"_id": token})
 
 
+async def ap_wipe(cid: int, only_posted: bool = False, links: bool = False) -> int:
+    """Delete every post of a channel (optionally only the posted ones, optionally their share links too)."""
+    q = {"chan": cid, **({"posted": True} if only_posted else {})}
+    tokens = [d["_id"] for d in await ap_posts_col.find(q, {"_id": 1}).to_list(None)]
+    if tokens:
+        await ap_posts_col.delete_many({"_id": {"$in": tokens}})
+        if links:
+            await links_col.delete_many({"_id": {"$in": tokens}})
+    return len(tokens)
+
+
 async def ap_reset(cid: int):
     await ap_posts_col.update_many({"chan": cid}, {"$set": {"posted": False, "posted_at": None}})
 
