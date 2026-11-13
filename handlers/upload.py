@@ -4,6 +4,7 @@ handlers/upload.py
 Admin file uploads: copy the file into the Database Channel, create a random-token
 deep link. Also used by Batch mode (many files -> ONE link).
 """
+import asyncio
 import html
 import logging
 
@@ -115,7 +116,24 @@ async def _batch_status(context, msg):
     context.user_data["batch_status"] = (sent.chat_id, sent.message_id)
 
 
+_batch_locks: dict = {}
+
+
+def batch_lock(uid: int) -> asyncio.Lock:
+    """Updates are processed concurrently: files sent together in Batch mode must be stored ONE AT A TIME,
+    otherwise two files get the same slot number (same backup code) and the order gets shuffled."""
+    return _batch_locks.setdefault(uid, asyncio.Lock())
+
+
 async def handle_upload(update, context):
+    if context.user_data.get("state") == "batch" and update.effective_user:
+        async with batch_lock(update.effective_user.id):
+            await _handle_upload(update, context)
+    else:
+        await _handle_upload(update, context)
+
+
+async def _handle_upload(update, context):
     msg, user = update.effective_message, update.effective_user
     in_batch = context.user_data.get("state") == "batch"
     kind, name = media_info(msg)

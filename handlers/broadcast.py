@@ -30,10 +30,18 @@ async def run_broadcast(bot, from_chat: int, msg_id: int, status_chat: int, stat
                 return
             except RetryAfter as e:
                 await asyncio.sleep(retry_seconds(e) + 1)
-            except (Forbidden, BadRequest) as e:
-                # user blocked the bot / deleted account / chat gone -> skip them next time
+            except Forbidden as e:
+                # user blocked the bot / deleted account -> skip them next time
                 counts["blocked"] += 1
                 await db.set_blocked(uid, True)
+                log.debug("Broadcast skip %s: %s", uid, e)
+                return
+            except BadRequest as e:
+                if any(w in str(e).lower() for w in ("chat not found", "deactivated", "user is deleted")):
+                    counts["blocked"] += 1
+                    await db.set_blocked(uid, True)
+                else:                         # e.g. a message problem: do NOT flag the user as blocked
+                    counts["failed"] += 1
                 log.debug("Broadcast skip %s: %s", uid, e)
                 return
             except TelegramError as e:

@@ -35,10 +35,10 @@ _last_open: dict = {}         # user_id -> monotonic time of the last accepted l
 # ------------------------------------------------------------------ /start
 async def start_cmd(update, context: ContextTypes.DEFAULT_TYPE):
     user, msg = update.effective_user, update.effective_message
-    await db.add_user(user.id)
+    banned = await db.touch_user(user.id)      # register + ban check in ONE database round trip
     context.user_data.clear()  # drop any half-finished admin prompt
 
-    if not is_admin(user.id) and await db.is_banned(user.id):
+    if banned and not is_admin(user.id):
         await msg.reply_text("🚫 You are banned from using this bot.")
         return
 
@@ -53,15 +53,16 @@ async def start_cmd(update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_token(context, user, chat_id: int, token: str):
-    link = await db.get_link(token)
+    if is_admin(user.id):  # admins bypass force-subscribe
+        link, missing = await db.get_link(token), []
+    else:                  # link lookup and channel-membership check run in parallel (faster first response)
+        link, missing = await asyncio.gather(db.get_link(token), get_missing(context.bot, user.id))
     if not link:
         await call(context.bot.send_message, chat_id, "❌ This link is invalid or has been revoked.")
         return
-    if not is_admin(user.id):  # admins bypass force-subscribe
-        missing = await get_missing(context.bot, user.id)
-        if missing:
-            await send_gate(context, user, chat_id, token, missing)
-            return
+    if missing:
+        await send_gate(context, user, chat_id, token, missing)
+        return
     await request_access(context.bot, chat_id, link)
 
 
@@ -101,16 +102,19 @@ async def check_callback(update, context):
     """Handles 'chk:<token>' (✅ I've Joined) and 'chk:' (Try Again / Verify)."""
     q, user = update.callback_query, update.callback_query.from_user
     token = q.data.split(":", 1)[1]
-    if not is_admin(user.id) and await db.is_banned(user.id):
-        await q.answer("🚫 You are banned from using this bot.", show_alert=True)
-        return
+    link = None
     if not is_admin(user.id):
-        missing = await get_missing(context.bot, user.id)
+        banned, missing = await asyncio.gather(db.is_banned(user.id), get_missing(context.bot, user.id))
+        if banned:
+            await q.answer("🚫 You are banned from using this bot.", show_alert=True)
+            return
         if missing:
             names = ", ".join(c["title"] for c in missing)[:150]
             await q.answer(f"❌ Please join first: {names}", show_alert=True)
             return
     await q.answer()
+    if token:
+        link_task = asyncio.ensure_future(db.get_link(token))      # fetch while the old message is being deleted
     try:
         await q.message.delete()
     except TelegramError:
@@ -119,7 +123,7 @@ async def check_callback(update, context):
         await call(context.bot.send_message, q.message.chat_id,
                    f"✅ Verified! Now open a file link to receive your files.\n\n📊 Daily limit: {db.limit_value()} links per user per day (each link gives all its files).")
         return
-    link = await db.get_link(token)
+    link = await link_task
     if not link:
         await call(context.bot.send_message, q.message.chat_id, "❌ This link is invalid or has been revoked.")
         return
@@ -180,7 +184,7 @@ async def request_access(bot, chat_id: int, link: dict):
         _last_open[chat_id] = time.monotonic()
         if len(_last_open) > 20000:                              # keep memory bounded
             _last_open.clear()
-        if await db.used_today(chat_id) >= db.limit_value():
+        if S.get("ads_enabled") and await db.used_today(chat_id) >= db.limit_value():
             await _limit_reached(bot, chat_id)                  # don't make them watch an ad for nothing
             return
     if await ads.gate(bot, chat_id, link):                      # Mini App button sent; files follow after the ad
@@ -199,7 +203,7 @@ async def deliver(bot, chat_id: int, link: dict):
         return
 
     limit = db.limit_value()
-    granted = await db.reserve_quota(chat_id, 1)       # 1 link = 1 count
+    granted, used = await db.claim_quota(chat_id)      # 1 link = 1 count (atomic, one DB call)
     if granted <= 0:
         await _limit_reached(bot, chat_id)
         return
@@ -207,9 +211,9 @@ async def deliver(bot, chat_id: int, link: dict):
     delivered = await _deliver(bot, chat_id, {**link, "ids": ids})   # ALL files of the link
     if delivered <= 0:
         await db.refund_quota(chat_id, 1)              # nothing was received -> don't burn a count
+        used = max(0, used - 1)
     _last_open[chat_id] = time.monotonic()             # cooldown starts after delivery finishes
 
-    used = await db.used_today(chat_id)
     text = f"📊 <b>Daily limit:</b> {used}/{limit} links used today · {max(0, limit - used)} left"
     if used >= limit:
         text += "\n\n🚫 Limit reached. Come back tomorrow (resets at 12:00 AM IST)."

@@ -1405,23 +1405,26 @@ async def a_batchstart(update, context, args):
 @action("batchdone")
 async def a_batchdone(update, context, args):
     q = update.callback_query
-    ids = sorted(set(context.user_data.get("batch_ids", [])))
 
-    if not ids:
-        await q.answer("Please send at least one file first.", show_alert=True)
-        return
+    # wait until every file that was sent before "Done" has finished uploading
+    async with upload.batch_lock(update.effective_user.id):
+        ids = sorted(set(context.user_data.get("batch_ids", [])))
 
-    await q.answer()
+        if not ids:
+            await q.answer("Please send at least one file first.", show_alert=True)
+            return
 
-    token = await db.create_link(
-        ids,
-        update.effective_user.id,
-        f"Batch ({len(ids)} files)",
-        token=context.user_data.get("batch_token"),
-    )
+        await q.answer()
 
-    for k in TEMP_KEYS:
-        context.user_data.pop(k, None)
+        token = await db.create_link(
+            ids,
+            update.effective_user.id,
+            f"Batch ({len(ids)} files)",
+            token=context.user_data.get("batch_token"),
+        )
+
+        for k in TEMP_KEYS:
+            context.user_data.pop(k, None)
 
     await show(
         update,
