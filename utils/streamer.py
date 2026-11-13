@@ -9,9 +9,12 @@ Database Channel and pipes it to the HTTP client chunk by chunk, with full Range
 
 Nothing in this module needs aiohttp, so it can be unit-tested with a fake client.
 """
+import asyncio
 import logging
+import os
 import re
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
@@ -21,6 +24,11 @@ log = logging.getLogger(__name__)
 
 CHUNK = 1024 * 1024          # Pyrogram's stream_media works in 1 MiB chunks
 INFO_TTL = 300               # seconds a file's metadata stays cached (file references expire eventually)
+
+# Speed settings (override with env vars if needed)
+PREFETCH = max(1, int(os.getenv("STREAM_PREFETCH", "8")))            # chunks (MiB) downloaded in parallel per viewer
+MAX_TRANSFERS = max(PREFETCH, int(os.getenv("STREAM_MAX_TRANSFERS", "64")))  # parallel Telegram requests, all viewers
+CHUNK_RETRIES = 3
 
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
@@ -118,10 +126,15 @@ class Streamer:
             return
         try:
             # Created inside the running loop on purpose (Pyrogram binds to the current loop).
-            client = Client(
-                "streamer", api_id=config.API_ID, api_hash=config.API_HASH,
-                bot_token=config.BOT_TOKEN, in_memory=True, no_updates=True,
-            )
+            kwargs = dict(api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN,
+                          in_memory=True, no_updates=True, sleep_threshold=60)
+            try:
+                # Pyrogram default is 1 = only ONE file transfer at a time for the whole bot (very slow).
+                client = Client("streamer", max_concurrent_transmissions=MAX_TRANSFERS, **kwargs)
+            except TypeError:       # older build without this option
+                client = Client("streamer", **kwargs)
+            if hasattr(client, "get_file_semaphore"):
+                client.get_file_semaphore = asyncio.Semaphore(MAX_TRANSFERS)
             await client.start()
             self.client = client
             self.error = ""
@@ -185,30 +198,53 @@ class Streamer:
         return (await self.get_infos(chat_id, [msg_id])).get(msg_id)
 
     # ------------------------------------------------------------ data
+    async def _fetch_chunk(self, info: FileInfo, index: int) -> bytes:
+        """Download exactly one 1 MiB chunk (with a few retries on transient errors)."""
+        for attempt in range(CHUNK_RETRIES):
+            try:
+                async for chunk in self.client.stream_media(info.message, limit=1, offset=index):
+                    return chunk
+                return b""
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if attempt == CHUNK_RETRIES - 1:
+                    raise
+                await asyncio.sleep(0.3 * (attempt + 1))
+        return b""
+
     async def iter_range(self, info: FileInfo, start: int, end: int) -> AsyncIterator[bytes]:
-        """Yield exactly bytes [start, end] of the file."""
+        """
+        Yield exactly bytes [start, end] of the file.
+        Up to PREFETCH chunks are downloaded in parallel (in order), so speed is no longer
+        limited by the round-trip time of one chunk at a time.
+        """
         remaining = end - start + 1
         first_chunk, skip = divmod(start, CHUNK)
         n_chunks = -(-(skip + remaining) // CHUNK)   # ceil
-        gen = self.client.stream_media(info.message, limit=n_chunks, offset=first_chunk)
+        pending: deque = deque()
+        next_idx, last_idx = first_chunk, first_chunk + n_chunks - 1
         try:
-            async for chunk in gen:
+            while remaining > 0:
+                while next_idx <= last_idx and len(pending) < PREFETCH:
+                    pending.append(asyncio.ensure_future(self._fetch_chunk(info, next_idx)))
+                    next_idx += 1
+                if not pending:
+                    break
+                chunk = await pending.popleft()
                 if skip:
                     chunk, skip = chunk[skip:], 0
                 if len(chunk) > remaining:
                     chunk = chunk[:remaining]
-                if chunk:
-                    remaining -= len(chunk)
-                    yield chunk
-                if remaining <= 0:
+                if not chunk:
                     break
+                remaining -= len(chunk)
+                yield chunk
         finally:
-            aclose = getattr(gen, "aclose", None)
-            if aclose:
-                try:
-                    await aclose()
-                except Exception:
-                    pass
+            for t in pending:           # viewer left / seeked: stop downloading right away
+                t.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
 
 streamer = Streamer()
