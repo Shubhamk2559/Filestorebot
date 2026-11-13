@@ -61,6 +61,7 @@ traffic: ping `/health` every 5 min with cron-job.org or UptimeRobot. Heroku: se
 - **Admins** (owner only) - add/remove by forwarded message or ID. **Reset** - defaults (keeps admins + DB channel).
 
 ## 5. Behaviour notes
+- **Daily limit = 10 links per user** (1 link = 1 count, every file inside the link is delivered). 5 second cooldown between two link opens. Admins are exempt.
 - Users get files **only** via `t.me/<bot>?start=<token>`; tokens are random, stored in MongoDB.
 - Non-admin uploads/messages are ignored. Admins skip force-sub.
 - If the bot loses admin rights in a channel, users are not blocked and the owner gets a warning message.
