@@ -1080,9 +1080,50 @@ async def a_bcgo(update, context, args):
 
 # ===================================================================== stats / ban / reset
 
+def _mb(b) -> str:
+    return f"{b / 1048576:.2f} MB"
+
+
+def _speed(ms) -> str:
+    if ms is None:
+        return "—"
+    icon = "🟢" if ms < 150 else "🟡" if ms < 500 else "🔴"
+    return f"{icon} {ms:.0f} ms"
+
+
+def mongo_text(m: dict, detail: bool = False) -> str:
+    if not m["ok"]:
+        return ("🍃 <b>MongoDB</b>\n🔴 <b>Not reachable</b>\n"
+                f"<code>{html.escape(m['error'] or 'unknown error')}</code>\n"
+                "Check the cluster in Atlas (it may be paused or the IP is blocked).")
+    limit = m["limit_mb"] * 1048576
+    pct = min(100.0, m["used"] / limit * 100) if limit else 0
+    left = max(0, limit - m["used"])
+    bar = "🟩" * round(pct / 10) + "⬜" * (10 - round(pct / 10))
+    if pct >= 90:
+        health = "🔴 Almost FULL - delete old data / upgrade now"
+    elif pct >= 80:
+        health = "🟡 Getting full"
+    else:
+        health = "🟢 Healthy"
+    t = (f"🍃 <b>MongoDB</b>\n{health}\n"
+         f"⚡ Ping: {_speed(m['ping_ms'])} · Read: {_speed(m['read_ms'])}\n"
+         f"💾 Used: <b>{_mb(m['used'])}</b> / {m['limit_mb']:g} MB (<b>{pct:.1f}%</b>)\n"
+         f"{bar}\n"
+         f"🆓 Left: <b>{_mb(left)}</b>\n"
+         f"📄 Documents: {m['objects']} · 🗂 Collections: {m['collections']}")
+    if m.get("conn"):
+        t += f"\n🔌 Connections: {m['conn'].get('current')} used, {m['conn'].get('available')} free"
+    if detail:
+        t += f"\n\n📦 Data {_mb(m['data'])} · Disk {_mb(m['storage'])} · Indexes {_mb(m['index'])}\n"
+        t += "\n".join(f"• <code>{html.escape(n)}</code>: {c} docs · {_mb(sz)}" for n, c, sz in m.get("cols", []))
+    return t
+
+
 @action("stats")
 async def a_stats(update, context, args):
     s = await db.stats()
+    m = await db.mongo_status()
 
     await show(
         update,
@@ -1091,12 +1132,21 @@ async def a_stats(update, context, args):
         f"📁 Files: <b>{s['files']}</b>\n"
         f"🔗 Links created: <b>{s['links']}</b>\n"
         f"🚫 Banned: <b>{s['banned']}</b>\n"
-        f"💤 Blocked the bot: <b>{s['blocked']}</b>",
+        f"💤 Blocked the bot: <b>{s['blocked']}</b>\n\n"
+        + mongo_text(m),
         M([
+            [B("🍃 MongoDB details", "adm:mongo")],
             [B("🔄 Refresh", "adm:stats")],
             [B("🔙 Back", "adm:home")],
         ]),
     )
+
+
+@action("mongo")
+async def a_mongo(update, context, args):
+    m = await db.mongo_status()
+    await show(update, mongo_text(m, detail=True),
+               M([[B("🔄 Refresh", "adm:mongo")], [B("🔙 Back", "adm:stats")]]))
 
 
 @action("ban")
