@@ -62,7 +62,7 @@ def B(text, callback_data):
 NOPREVIEW = LinkPreviewOptions(is_disabled=True)
 PAGE = 8
 MAX_RANGE = 10000
-TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "short_tmp", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts")
+TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts")
 
 ACTIONS = {}
 STATES = {}
@@ -925,102 +925,6 @@ async def st_fcap(update, context):
     await msg.reply_text(
         "✅ Custom caption saved.",
         reply_markup=K.back("fcap"),
-    )
-
-
-# ===================================================================== shortener
-
-@action("short")
-async def a_short(update, context, args):
-    note = ""
-
-    if args and args[0] == "t":
-        await S.set("shortener_enabled", not S.get("shortener_enabled"))
-        note = "✅ Updated.\n\n"
-
-    elif args and args[0] == "rm":
-        await S.set("shortener_url", "")
-        await S.set("shortener_key", "")
-        await S.set("shortener_enabled", False)
-        note = "✅ Shortener removed.\n\n"
-
-    elif args and args[0] == "set":
-        await ask(
-            update,
-            context,
-            "short_url",
-            "💸 <b>Shortener API URL</b>\n\n"
-            "Send the API URL, e.g. <code>https://gplinks.in/api</code>\n"
-            "Request format: <code>URL?api=KEY&amp;url=LINK&amp;format=text</code>",
-        )
-        return
-
-    url, on = S.get("shortener_url"), S.get("shortener_enabled")
-
-    await show(
-        update,
-        f"{note}💸 <b>Shortener</b> (optional)\n\n"
-        f"API URL: {html.escape(url) or '— not set —'}\n"
-        f"API key: {'••••' + S.get('shortener_key')[-3:] if S.get('shortener_key') else '— not set —'}\n"
-        f"Status: {'ON ✅' if on else 'OFF'}",
-        M([
-            [B("✏️ Set API", "adm:short:set")],
-            [
-                B("🔕 Turn OFF" if on else "🔔 Turn ON", "adm:short:t"),
-                B("🗑 Remove", "adm:short:rm"),
-            ],
-            [B("🔙 Back", "adm:home")],
-        ]),
-    )
-
-
-@state("short_url")
-async def st_short_url(update, context):
-    msg = update.effective_message
-    url = (msg.text or "").strip()
-
-    if not re.match(r"^https?://\S+$", url):
-        await msg.reply_text(
-            "⚠️ Send a valid http(s) URL.",
-            reply_markup=K.cancel(),
-        )
-        return
-
-    context.user_data["short_tmp"] = url
-    context.user_data["state"] = "short_key"
-
-    await msg.reply_text(
-        "🔑 Send your <b>API key</b>. The message will be deleted afterwards.",
-        reply_markup=K.cancel(),
-    )
-
-
-@state("short_key")
-async def st_short_key(update, context):
-    msg = update.effective_message
-    key = (msg.text or "").strip()
-
-    if not key or " " in key:
-        await msg.reply_text(
-            "⚠️ Send the API key as plain text.",
-            reply_markup=K.cancel(),
-        )
-        return
-
-    await S.set("shortener_url", context.user_data.pop("short_tmp", ""))
-    await S.set("shortener_key", key)
-    await S.set("shortener_enabled", True)
-
-    context.user_data.pop("state", None)
-
-    try:
-        await msg.delete()
-    except TelegramError:
-        pass
-
-    await update.effective_chat.send_message(
-        "✅ Shortener saved and enabled.",
-        reply_markup=K.back("short"),
     )
 
 
