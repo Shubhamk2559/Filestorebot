@@ -11,7 +11,7 @@ handlers/start.py   /start, force-sub gate, "I've Joined", file delivery
 handlers/admin.py   the whole admin panel (buttons + state machine)
 handlers/upload.py  admin uploads, batch mode, link creation
 handlers/broadcast.py  broadcast with progress + flood control
-utils/              helpers, keyboards, membership check, shortener, scheduler, web server (/health, /dl, /ad)
+utils/              helpers, keyboards, membership check, scheduler, web server (/health, /dl, /ad)
 ```
 
 ## 1. Get the credentials
@@ -57,7 +57,6 @@ Put your own reverse proxy (nginx/Caddy, `proxy_buffering off`) in front of port
 - **Join Buttons** - channel buttons are automatic; add custom ones as `Text - URL` (`|` for same row).
 - **Auto-Delete** - Off / 5 / 10 / 30 min (survives restarts). **Protect Content** - blocks forwarding/saving.
 - **File Caption** - custom caption, or strip the original caption.
-- **Shortener** - optional API URL + key (GPLinks-style `?api=KEY&url=LINK`).
 - **Broadcast** - send/forward a message, confirm, watch live progress (flood-safe).
 - **Stats** - users, files, links, banned, blocked. **Ban/Unban** - forward a message or send an ID.
 - **Admins** (owner only) - add/remove by forwarded message or ID. **Reset** - defaults (keeps admins + DB channel).
