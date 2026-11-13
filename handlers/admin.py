@@ -41,6 +41,7 @@ from utils.helpers import (
     extract_post_id,
 )
 from utils import ads
+from utils.links import share_link
 from utils.streamer import streamer
 
 log = logging.getLogger(__name__)
@@ -1499,7 +1500,7 @@ async def a_lk(update, context, args):
         )
         return
 
-    url = f"https://t.me/{context.bot.username}?start={link['_id']}"
+    url = share_link(context.bot.username, link["_id"])
 
     await show(
         update,
