@@ -15,6 +15,7 @@ Every prompt has a "❌ Cancel" button; every result screen has a "🔙 Back" bu
 import html
 import logging
 import re
+import time
 
 import config
 
@@ -39,6 +40,7 @@ from utils.helpers import (
     extract_user_id,
     extract_post_id,
 )
+from utils import ads
 from utils.streamer import streamer
 
 log = logging.getLogger(__name__)
@@ -1167,6 +1169,115 @@ async def a_reset(update, context, args):
 async def a_resetyes(update, context, args):
     await S.reset()
     await show(update, "✅ Settings have been reset.", K.back())
+
+
+# ===================================================================== ads (Monetag Mini App)
+
+def _ago(ts) -> str:
+    if not ts:
+        return "never"
+    d = int(time.time() - ts)
+    return f"{d}s ago" if d < 90 else f"{d // 60} min ago" if d < 5400 else f"{d // 3600} h ago"
+
+
+@action("ads")
+async def a_ads(update, context, args):
+    note = ""
+    a = args[0] if args else ""
+
+    if a == "t":
+        if not S.get("ads_enabled") and not ads.zone():
+            note = "⚠️ Set the Zone ID first.\n\n"
+        else:
+            await S.set("ads_enabled", not S.get("ads_enabled"))
+            note = "✅ Updated.\n\n"
+    elif a == "pb":
+        await S.set("ads_postback", not S.get("ads_postback"))
+        note = "✅ Updated.\n\n"
+    elif a == "ab":
+        await S.set("ads_block_adblock", not S.get("ads_block_adblock"))
+        note = "✅ Updated.\n\n"
+    elif a == "newsec":
+        await S.set("ads_secret", "")
+        await ads.ensure_secret()
+        note = "🔑 New secret created. Paste the NEW postback URL in Monetag.\n\n"
+    elif a == "zone":
+        await ask(update, context, "ads_zone",
+                  "📺 <b>Monetag Zone ID</b>\n\nSend your main <b>SDK zone ID</b> (digits only), "
+                  "the number in <code>data-zone=\"123456\"</code> of your Monetag Telegram Mini App code.")
+        return
+    elif a == "sdk":
+        await ask(update, context, "ads_sdk",
+                  "🔗 <b>SDK script URL</b>\n\nSend the <code>src</code> of the script tag from your Monetag code, "
+                  f"e.g. <code>{html.escape(S.get('ads_sdk_url'))}</code>")
+        return
+
+    on = S.get("ads_enabled")
+    st = await ads.get_stats()
+    pb_url = await ads.postback_url()
+    warn = ""
+    if not ads.mini_app_ready():
+        warn += "⚠️ <b>BASE_URL</b> must be a public https URL, otherwise ads are skipped.\n"
+    if not ads.zone():
+        warn += "⚠️ Zone ID is not set.\n"
+    if on and S.get("ads_postback") and not S.get("ads_last_postback"):
+        warn += "⚠️ No postback received yet: paste the Postback URL below in Monetag.\n"
+    if not S.get("ads_postback"):
+        warn += "⚠️ Server verification is OFF: an ad can be faked from the client. Keep it ON.\n"
+
+    await show(
+        update,
+        f"{note}📺 <b>Ads (Monetag Mini App)</b>\n\n"
+        f"Status: {'ON ✅' if on else 'OFF'}\n"
+        f"Zone ID: <code>{html.escape(ads.zone()) or '— not set —'}</code>\n"
+        f"SDK URL: <code>{html.escape(ads.sdk_url())}</code>\n"
+        f"Server verification (postback): {'ON ✅' if S.get('ads_postback') else 'OFF ⚠️'} "
+        f"· last postback: {_ago(S.get('ads_last_postback'))}\n"
+        f"AdBlock / DNS blocker check: {'ON ✅' if S.get('ads_block_adblock') else 'OFF'}\n"
+        f"No-fill tries before free files: {S.get('ads_tries')} "
+        f"(max {ads.FALLBACK_DAILY} such fallbacks per user per day)\n\n"
+        f"📈 Ads verified: {st.get('verified', 0)} · Fallback: {st.get('fallback', 0)} · "
+        f"Blocked: {st.get('blocked', 0)}\n\n"
+        f"{warn}\n"
+        "<b>Postback URL</b> (Monetag → your SDK zone → Postback URL):\n"
+        f"<code>{html.escape(pb_url)}</code>\n\n"
+        "Also add this app URL in Monetag → Telegram Mini App:\n"
+        f"<code>{html.escape(config.BASE_URL or '— BASE_URL not set —')}</code>",
+        M([
+            [B("🔕 Turn OFF" if on else "🔔 Turn ON", "adm:ads:t")],
+            [B("✏️ Zone ID", "adm:ads:zone"), B("🔗 SDK URL", "adm:ads:sdk")],
+            [B("🛰 Server verify: " + ("ON" if S.get("ads_postback") else "OFF"), "adm:ads:pb")],
+            [B("🛡 AdBlock check: " + ("ON" if S.get("ads_block_adblock") else "OFF"), "adm:ads:ab")],
+            [B("🔑 New postback secret", "adm:ads:newsec")],
+            [B("🔙 Back", "adm:home")],
+        ]),
+    )
+
+
+@state("ads_zone")
+async def st_ads_zone(update, context):
+    msg = update.effective_message
+    z = (msg.text or "").strip()
+    if not re.fullmatch(r"\d{3,14}", z):
+        await msg.reply_text("⚠️ Send the zone ID as digits only.", reply_markup=K.cancel())
+        return
+    await S.set("ads_zone", z)
+    context.user_data.pop("state", None)
+    await msg.reply_text(f"✅ Zone ID saved: <code>{z}</code>", reply_markup=K.back("ads"))
+
+
+@state("ads_sdk")
+async def st_ads_sdk(update, context):
+    msg = update.effective_message
+    u = (msg.text or "").strip()
+    if u.startswith("//"):
+        u = "https:" + u
+    if not re.fullmatch(r"https://[^\s'\"<>]+", u):
+        await msg.reply_text("⚠️ Send a valid https URL.", reply_markup=K.cancel())
+        return
+    await S.set("ads_sdk_url", u)
+    context.user_data.pop("state", None)
+    await msg.reply_text("✅ SDK URL saved.", reply_markup=K.back("ads"))
 
 
 # ===================================================================== batch + links
