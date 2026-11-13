@@ -106,8 +106,8 @@ def group_posts(items: list):
     """
     A file WITH a caption starts a new post and is its thumbnail.
     Every file WITHOUT a caption below it belongs to that post, until the next captioned file.
-    An ALBUM (Telegram media group) is always ONE post: all its files go into the same share link,
-    its captioned (else first) item is the thumbnail.
+    A captionless album below a captioned file = files of that post (all photos in the same link).
+    An album that itself has a caption = its own post.
     Returns (posts, orphans): orphans = captionless files that came before the first caption.
     """
     albums = {}
@@ -117,18 +117,19 @@ def group_posts(items: list):
     posts, cur, orphans, done = [], None, 0, set()
     for it in items:
         gid = it.get("gid")
-        if gid:
-            if gid in done:
-                continue
+        # a captioned album = ONE post (all its files in one link, the captioned item is the thumbnail)
+        if gid and gid not in done and any(x["cap"].strip() for x in albums[gid]):
             done.add(gid)
             files = albums[gid]
-            thumb = next((x for x in files if x["cap"].strip()), files[0])
+            thumb = next(x for x in files if x["cap"].strip())
             cur = {"thumb": thumb, "files": list(files), "album": True}
             posts.append(cur)
+        elif gid in done:
+            continue
         elif it["cap"].strip():
             cur = {"thumb": it, "files": []}
             posts.append(cur)
-        elif cur is not None:
+        elif cur is not None:          # captionless file / album -> files of the post above it
             cur["files"].append(it)
         else:
             orphans += 1
