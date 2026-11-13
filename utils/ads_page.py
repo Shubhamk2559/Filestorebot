@@ -53,7 +53,9 @@ PAGE = r"""<!doctype html>
 var tg = window.Telegram && window.Telegram.WebApp;
 var $ = function(id){return document.getElementById(id)};
 var sid = new URLSearchParams(location.search).get("s") || "";
-var cfg = null, sdkReady = false, sdkTag = null;
+var BOOT = __BOOT__;               /* settings baked in by the server -> no init round trip before we start */
+var PRELOAD = true;                /* ask the ad SDK to fetch the ad in the background while we check things */
+var cfg = BOOT, sdkReady = false, sdkTag = null;
 
 function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
 function ui(icon,title,text,o){
@@ -75,7 +77,7 @@ async function api(path,data){
 
 /* ---------------------------------------------------------------- ad blocker / DNS detection */
 async function ping(url,ms){
-  var c=new AbortController(), t=setTimeout(function(){c.abort()},ms||7000);
+  var c=new AbortController(), t=setTimeout(function(){c.abort()},ms||2500);
   try{
     await fetch(url+(url.indexOf("?")>-1?"&":"?")+"_="+Date.now(),{mode:"no-cors",cache:"no-store",signal:c.signal});
     return "ok";
@@ -97,7 +99,7 @@ function baitHidden(){
 }
 async function detect(){
   var sdkHost=new URL(cfg.sdk).origin+"/";
-  var r=await Promise.all([ping("/health"),baitHidden(),ping(sdkHost)].concat(cfg.probes.map(function(u){return ping(u)})));
+  var r=await Promise.all([ping("/health",4000),baitHidden(),ping(sdkHost)].concat(cfg.probes.map(function(u){return ping(u)})));
   var ctrl=r[0], bait=r[1], sdk=r[2], gen=r.slice(3);
   if(ctrl!=="ok") return {offline:true,blocked:false,detail:"offline"};
   var genFail=gen.filter(function(x){return x==="fail"}).length;
@@ -129,19 +131,34 @@ async function claim(){
   var c=await api("claim");
   if(c.ok){
     ui("✅","Done!","Your files are being sent to the chat.");
-    setTimeout(function(){try{tg.close()}catch(e){}},1400);
+    setTimeout(function(){try{tg.close()}catch(e){}},500);
   }else{
     ui("⚠️","Could not unlock","Please go back to the chat and open your file link again.");
   }
 }
 async function pollReady(sec){
-  for(var i=0;i<sec;i++){
-    var r=await api("status");
-    if(r.state==="ready") return true;
-    if(r.state==="closed") return false;
-    await sleep(1000);
+  /* the server holds each status call open until the ad is confirmed -> we continue the instant it is */
+  var end=Date.now()+sec*1000;
+  while(Date.now()<end){
+    try{
+      var r=await api("status",{wait:1});
+      if(r.state==="ready") return true;
+      if(r.state==="closed") return false;
+    }catch(e){ await sleep(500); }
+    await sleep(120);
   }
   return false;
+}
+async function ensureSdk(){
+  if(sdkReady) return true;
+  try{ await loadSdk(); sdkReady=true; return true; }catch(e){ return false; }
+}
+function preloadAd(){
+  if(!PRELOAD||!sdkReady) return;
+  try{
+    var p=window["show_"+cfg.zone]({type:"preload",ymid:sid,requestVar:"files"});
+    if(p&&p.catch) p.catch(function(){});
+  }catch(e){}
 }
 function finalMsg(state){
   if(state==="no_fallback") ui("⏳","No ads available right now","Please try again a little later.");
@@ -152,31 +169,38 @@ function finalMsg(state){
 async function run(){
   if(!tg||!tg.initData){ ui("⚠️","Open inside Telegram","This page works only from the bot's button in Telegram."); return; }
   try{tg.ready();tg.expand();if(tg.disableVerticalSwipes)tg.disableVerticalSwipes();}catch(e){}
-  try{ cfg=await api("init"); }catch(e){ ui("⚠️","Session invalid","Go back to the chat and open your file link again."); return; }
-  if(cfg.state==="done"){ ui("✅","Already sent","Your files were already sent to the chat."); return; }
-  if(cfg.state!=="open"){ finalMsg("closed"); return; }
+  ui("🔍","Checking your connection…","",{spin:true});
 
+  /* start everything at the same time instead of one step after another */
+  var initP = api("init");
+  var envP  = detect();
+  var sdkP  = ensureSdk().then(function(ok){ if(ok) preloadAd(); return ok; });
+
+  var st;
+  try{ st=await initP; }catch(e){ ui("⚠️","Session invalid","Go back to the chat and open your file link again."); return; }
+  if(st.state==="done"){ ui("✅","Already sent","Your files were already sent to the chat."); return; }
+  if(st.state!=="open"){ finalMsg("closed"); return; }
+
+  var first=true;
   for(;;){
-    ui("🔍","Checking your connection…","",{spin:true});
-    var env=await detect();
+    var env, sdkOk;
+    if(first){ env=await envP; sdkOk=await sdkP; first=false; }
+    else{
+      ui("🔍","Checking your connection…","",{spin:true});
+      env=await detect(); sdkOk=await ensureSdk();
+    }
     if(env.offline){ ui("📡","No internet","Check your connection and try again.",{btn:"Try again"}); await waitClick(); continue; }
     if(cfg.strict && env.blocked){
       try{await api("probe",{blocked:true,detail:env.detail});}catch(e){}
       showBlocked(); await waitClick(); continue;
     }
-    await api("probe",{blocked:false,detail:""});
+    if(!sdkOk && cfg.strict){ try{await api("probe",{blocked:true,detail:"sdk"});}catch(_){} showBlocked(); await waitClick(); continue; }
+    if(sdkOk) preloadAd();
 
-    if(!sdkReady){
-      try{ await loadSdk(); sdkReady=true; }
-      catch(e){
-        if(cfg.strict){ try{await api("probe",{blocked:true,detail:"sdk"});}catch(_){} showBlocked(); await waitClick(); continue; }
-      }
-    }
-
-    var a=await api("attempt");
+    var a=await api("attempt",{blocked:false,detail:""});   /* the clean probe result rides along */
     if(!a.ok){
       if(a.state==="blocked"){ showBlocked(); await waitClick(); continue; }
-      if(a.state==="slow_down"){ await sleep(2200); continue; }
+      if(a.state==="slow_down"){ await sleep(1200); continue; }
       finalMsg(a.state); return;
     }
 
@@ -193,7 +217,7 @@ async function run(){
       if(r.state==="too_fast"){ ui("⏱","Please watch the full ad","The ad must play till the end.",{spin:true}); await sleep(2500); continue; }
       ui("🔐","Verifying…","",{spin:true});
       if(r.state==="ready" || await pollReady(30)){ await claim(); return; }
-      ui("⚠️","Ad could not be verified","Trying again…",{spin:true}); await sleep(2500); continue;
+      ui("⚠️","Ad could not be verified","Trying again…",{spin:true}); await sleep(1200); continue;
     }
 
     /* the ad did not show: ad blocker, or genuinely no ad available? */
@@ -212,7 +236,7 @@ async function run(){
     }else{
       ui("🔄","Ad was closed","Please watch the full ad to unlock your files.",{spin:true});
     }
-    await sleep(3000);
+    await sleep(1500);
   }
 }
 run().catch(function(e){ ui("⚠️","Something went wrong","Close this window and open your file link again."); });
