@@ -82,7 +82,8 @@ def fmt_slots(slots: list) -> str:
 def item_from_ptb(msg, kind: str, name: str) -> dict:
     """A file the admin sent / forwarded to the bot."""
     return {"chat": msg.chat_id, "mid": msg.message_id, "kind": kind, "name": name,
-            "cap": (msg.caption or ""), "cap_html": (msg.caption_html or "")}
+            "cap": (msg.caption or ""), "cap_html": (msg.caption_html or ""),
+            "gid": str(msg.media_group_id) if getattr(msg, "media_group_id", None) else None}
 
 
 def item_from_pyro(m):
@@ -97,18 +98,34 @@ def item_from_pyro(m):
     name = None if kind == "photo" else getattr(obj, "file_name", None)
     plain = str(cap) if cap else ""
     return {"chat": m.chat.id, "mid": m.id, "kind": kind, "name": name or plain[:40] or kind,
-            "cap": plain, "cap_html": (cap.html if cap else "")}
+            "cap": plain, "cap_html": (cap.html if cap else ""),
+            "gid": str(m.media_group_id) if getattr(m, "media_group_id", None) else None}
 
 
 def group_posts(items: list):
     """
     A file WITH a caption starts a new post and is its thumbnail.
     Every file WITHOUT a caption below it belongs to that post, until the next captioned file.
+    An ALBUM (Telegram media group) is always ONE post: all its files go into the same share link,
+    its captioned (else first) item is the thumbnail.
     Returns (posts, orphans): orphans = captionless files that came before the first caption.
     """
-    posts, cur, orphans = [], None, 0
+    albums = {}
     for it in items:
-        if it["cap"].strip():
+        if it.get("gid"):
+            albums.setdefault(it["gid"], []).append(it)
+    posts, cur, orphans, done = [], None, 0, set()
+    for it in items:
+        gid = it.get("gid")
+        if gid:
+            if gid in done:
+                continue
+            done.add(gid)
+            files = albums[gid]
+            thumb = next((x for x in files if x["cap"].strip()), files[0])
+            cur = {"thumb": thumb, "files": list(files), "album": True}
+            posts.append(cur)
+        elif it["cap"].strip():
             cur = {"thumb": it, "files": []}
             posts.append(cur)
         elif cur is not None:
@@ -116,6 +133,26 @@ def group_posts(items: list):
         else:
             orphans += 1
     return posts, orphans
+
+
+# ------------------------------------------------------------------ post caption / button (set from the admin panel)
+DEFAULT_BTN = "📥 Get Files"
+BTN_MAX = 40
+
+
+def _plain_len(h: str) -> int:
+    return len(html.unescape(re.sub(r"<[^>]+>", "", h)))
+
+
+def render_caption(tpl: str, cap_html: str) -> str:
+    """Fill the channel's caption template. {caption} = the post's own caption; no {caption} = a fixed caption."""
+    tpl = (tpl or "").strip() or "{caption}"
+    out = tpl.replace("{caption}", cap_html)
+    if _plain_len(out) <= CAPTION_MAX:
+        return out
+    plain = html.unescape(re.sub(r"<[^>]+>", "", cap_html))
+    room = max(0, CAPTION_MAX - _plain_len(tpl.replace("{caption}", "")))
+    return tpl.replace("{caption}", html.escape(plain[:room]))
 
 
 # ------------------------------------------------------------------ storing into the Database Channel
@@ -192,8 +229,8 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
             error = str(e)
             break
         th = p["thumb"]
-        title = re.sub(r"\s+", " ", th["cap"]).strip()[:40]
-        await db.create_link(ids, by, title or "Post", token=token)
+        title = re.sub(r"\s+", " ", th["cap"]).strip()[:40] or ("Album" if p.get("album") else "Post")
+        await db.create_link(ids, by, title, token=token)
         seq += 1
         await db.ap_add_post(cid, token, thumb_token, seq, title, th["cap_html"], th["kind"], len(ids), by)
         made += 1
@@ -210,9 +247,12 @@ async def send_post(bot, chat_id: int, post: dict):
     thumb = await db.thumb_msg_id(db.make_code(post["thumb_token"], 0))
     if not thumb:
         return "thumbnail not found in the Database Channel"
-    kb = M([[B("📥 Get Files", url=share_link(bot.username, post["_id"]))]])
+    ch = await db.ap_get_channel(chat_id) or {}
+    btn = (ch.get("btn") or "").strip() or DEFAULT_BTN
+    kb = M([[B(btn, url=share_link(bot.username, post["_id"]))]])
     try:
-        await call(bot.copy_message, chat_id, channel["id"], thumb, caption=post["cap"],
+        await call(bot.copy_message, chat_id, channel["id"], thumb,
+                   caption=render_caption(ch.get("cap_tpl"), post["cap"]),
                    parse_mode=ParseMode.HTML, reply_markup=kb)
     except TelegramError as e:
         return str(e)
