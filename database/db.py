@@ -174,6 +174,39 @@ async def stats() -> dict:
     }
 
 
+async def mongo_status() -> dict:
+    """Health, speed and storage of the MongoDB database (for the Stats screen)."""
+    out = {"ok": False, "error": "", "ping_ms": None, "read_ms": None, "limit_mb": config.MONGO_LIMIT_MB}
+    try:
+        t = time.perf_counter()
+        await db.command("ping")
+        out["ping_ms"] = (time.perf_counter() - t) * 1000
+        t = time.perf_counter()
+        await settings_col.find_one({"_id": "main"})
+        out["read_ms"] = (time.perf_counter() - t) * 1000
+        st = await db.command("dbStats", scale=1)
+        out.update(ok=True, objects=st.get("objects", 0), data=st.get("dataSize", 0),
+                   storage=st.get("storageSize", 0), index=st.get("indexSize", 0),
+                   collections=st.get("collections", 0))
+        out["used"] = out["storage"] + out["index"]          # what Atlas counts against the quota
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"[:200]
+        return out
+    try:
+        out["conn"] = (await db.client.admin.command("serverStatus")).get("connections")
+    except Exception:
+        out["conn"] = None                                   # free tier does not allow serverStatus
+    cols = []
+    for name in sorted(await db.list_collection_names()):
+        try:
+            c = await db.command("collStats", name)
+            cols.append((name, c.get("count", 0), c.get("storageSize", 0) + c.get("totalIndexSize", 0)))
+        except Exception:
+            pass
+    out["cols"] = sorted(cols, key=lambda x: -x[2])
+    return out
+
+
 # ---------------------------------------------------------------- files & links
 def new_token() -> str:
     return secrets.token_urlsafe(9)  # 12 random URL-safe chars, unguessable
