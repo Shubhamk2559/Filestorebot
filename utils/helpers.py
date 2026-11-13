@@ -125,10 +125,12 @@ def picker_keyboard(channel: bool = True, group: bool = False):
     rows = []
     if channel:
         rows.append([KeyboardButton("📢 Choose a Channel", request_chat=KeyboardButtonRequestChat(
-            _PICK_CHANNEL, chat_is_channel=True, bot_administrator_rights=ch_rights))])
+            _PICK_CHANNEL, chat_is_channel=True,
+            user_administrator_rights=ch_rights, bot_administrator_rights=ch_rights))])
     if group:
         rows.append([KeyboardButton("👥 Choose a Group", request_chat=KeyboardButtonRequestChat(
-            _PICK_GROUP, chat_is_channel=False, bot_administrator_rights=gr_rights))])
+            _PICK_GROUP, chat_is_channel=False,
+            user_administrator_rights=gr_rights, bot_administrator_rights=gr_rights))])
     rows.append([KeyboardButton(CANCEL_TEXT)])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
