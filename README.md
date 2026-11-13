@@ -11,7 +11,7 @@ handlers/start.py   /start, force-sub gate, "I've Joined", file delivery
 handlers/admin.py   the whole admin panel (buttons + state machine)
 handlers/upload.py  admin uploads, batch mode, link creation
 handlers/broadcast.py  broadcast with progress + flood control
-utils/              helpers, keyboards, membership check, shortener, scheduler, health
+utils/              helpers, keyboards, membership check, shortener, scheduler, web server (/health, /dl, /ad)
 ```
 
 ## 1. Get the credentials
@@ -22,24 +22,26 @@ utils/              helpers, keyboards, membership check, shortener, scheduler, 
 | `MONGO_URI` | MongoDB Atlas free cluster -> Connect -> Drivers (allow your host IP / 0.0.0.0/0) |
 | `OWNER_ID` | Message **@userinfobot** to see your numeric ID |
 
-## 2. Run
+## 2. Deploy on a VPS (recommended: Docker + automatic HTTPS)
+1. Point a domain / subdomain (A record) to your VPS IP. Open ports **80** and **443** in the VPS firewall.
+2. In MongoDB Atlas -> Network Access, allow the VPS IP (or 0.0.0.0/0).
+3. Upload this folder to the VPS, then:
 ```bash
-cp .env.example .env   # fill in the 5 values
+cp .env.example .env && nano .env     # BOT_TOKEN, OWNER_ID, MONGO_URI, API_ID, API_HASH, DOMAIN
+bash deploy.sh                        # installs Docker if needed, builds, starts bot + Caddy (HTTPS)
 ```
-**Docker (one command):**
-```bash
-docker build -t filebot . && docker run -d --name filebot --restart unless-stopped --env-file .env -p 8080:8080 filebot
-```
-**VPS without Docker:**
-```bash
-python3 -m venv venv && . venv/bin/activate && pip install -r requirements.txt && python main.py
-```
-Run it 24/7 with systemd or `pm2 start "python main.py" --name filebot`.
+Update later: upload the new files and run `bash deploy.sh` again. Logs: `docker compose logs -f bot`.
 
-**Koyeb / Render / Heroku:** deploy this folder (GitHub repo) as a Docker service / worker, add the 5 env vars.
-Health check path: `/health` (port = `$PORT`, injected automatically). Render/Koyeb free web services sleep without
-traffic: ping `/health` every 5 min with cron-job.org or UptimeRobot. Heroku: set the dyno to `web` and use the Dockerfile
-(`heroku stack:set container`).
+`BASE_URL` is set automatically to `https://$DOMAIN` (needed for Monetag ads and Stream/Download links).
+Only **one** instance may run per `BOT_TOKEN` (stop old deployments on Koyeb/Replit/Render first).
+
+**Without Docker:**
+```bash
+python3 -m venv venv && . venv/bin/activate && pip install -r requirements.txt tgcrypto && python main.py
+```
+Put your own reverse proxy (nginx/Caddy, `proxy_buffering off`) in front of port 8080 and set `BASE_URL`.
+
+**Koyeb / Render / Heroku:** deploy as a Docker service, add the env vars, health check path `/health`.
 
 ## 3. First-time setup (inside Telegram)
 1. Create a **private channel** for storage and add the bot as **admin** (Post Messages).

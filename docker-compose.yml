@@ -1,0 +1,44 @@
+services:
+  bot:
+    build: .
+    container_name: filebot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "8080"
+      BASE_URL: "https://${DOMAIN}"      # overrides BASE_URL from .env so you only maintain DOMAIN
+    expose:
+      - "8080"                           # only Caddy can reach it; not open to the internet directly
+    stop_grace_period: 20s
+    mem_limit: 700m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: filebot-caddy
+    restart: unless-stopped
+    depends_on:
+      - bot
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: "${DOMAIN}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:

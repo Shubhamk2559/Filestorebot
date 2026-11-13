@@ -5,7 +5,12 @@ Starts: MongoDB + settings cache, health endpoint (/health), auto-delete worker,
 import asyncio
 import logging
 
-from telegram import Update
+try:                                   # uvloop = much faster event loop (Linux/VPS). Optional.
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+except Exception:                      # not installed / not supported -> normal asyncio
+    pass
+
 from telegram.constants import ParseMode
 from telegram.error import Conflict, NetworkError
 from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandler,
@@ -35,6 +40,8 @@ async def post_init(app):
     app.bot_data["reg"] = asyncio.create_task(register_bot(app.bot.username))   # links -> this bot (Cloudflare Worker)
     log.info("Bot @%s started (web on :%s, streaming %s)", app.bot.username, config.PORT,
              "ON" if streamer.ready else f"OFF ({streamer.error})")
+    if not config.BASE_URL.startswith("https://"):
+        log.warning("BASE_URL is not a public https URL -> Monetag ads (Mini App) and Stream/Download links will not work.")
 
 
 async def post_shutdown(app):
@@ -64,7 +71,17 @@ def main():
     app = (ApplicationBuilder()
            .token(config.BOT_TOKEN)
            .defaults(Defaults(parse_mode=ParseMode.HTML))
-           .concurrent_updates(True)   # many users can receive files at the same time
+           .concurrent_updates(256)    # many users can receive files at the same time
+           # Bot API connection pool: must be big, otherwise concurrent users queue up behind each other
+           .connection_pool_size(256)
+           .pool_timeout(15)
+           .connect_timeout(10)
+           .read_timeout(30)
+           .write_timeout(30)
+           .get_updates_connection_pool_size(4)
+           .get_updates_read_timeout(40)
+           .get_updates_connect_timeout(10)
+           .get_updates_pool_timeout(15)
            .post_init(post_init)
            .post_shutdown(post_shutdown)
            .build())
@@ -78,7 +95,9 @@ def main():
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST & ~filters.COMMAND, upload.channel_restore))
     app.add_error_handler(on_error)
 
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # only the update types this bot really uses (less traffic, less CPU)
+    app.run_polling(allowed_updates=["message", "callback_query", "channel_post"],
+                    drop_pending_updates=True, timeout=30)
 
 
 if __name__ == "__main__":

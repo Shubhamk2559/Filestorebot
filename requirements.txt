@@ -4,4 +4,5 @@ pymongo>=4.9,<5
 dnspython>=2.4
 aiohttp>=3.9
 python-dotenv>=1.0
-pyrofork>=2.3.60
+pyrofork>=2.3.60,<3
+uvloop>=0.19; sys_platform != "win32"
