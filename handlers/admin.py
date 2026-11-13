@@ -1197,6 +1197,9 @@ async def a_ads(update, context, args):
     elif a == "ab":
         await S.set("ads_block_adblock", not S.get("ads_block_adblock"))
         note = "✅ Updated.\n\n"
+    elif a == "tst":
+        await S.set("ads_admin_test", not S.get("ads_admin_test"))
+        note = "✅ Updated.\n\n"
     elif a == "newsec":
         await S.set("ads_secret", "")
         await ads.ensure_secret()
@@ -1233,6 +1236,7 @@ async def a_ads(update, context, args):
         f"SDK URL: <code>{html.escape(ads.sdk_url())}</code>\n"
         f"Server verification (postback): {'ON ✅' if S.get('ads_postback') else 'OFF ⚠️'} "
         f"· last postback: {_ago(S.get('ads_last_postback'))}\n"
+        f"Test as admin (ads shown to admins too): {'ON ✅' if S.get('ads_admin_test') else 'OFF'}\n"
         f"AdBlock / DNS blocker check: {'ON ✅' if S.get('ads_block_adblock') else 'OFF'}\n"
         f"No-fill tries before free files: {S.get('ads_tries')} "
         f"(max {ads.FALLBACK_DAILY} such fallbacks per user per day)\n\n"
@@ -1248,6 +1252,7 @@ async def a_ads(update, context, args):
             [B("✏️ Zone ID", "adm:ads:zone"), B("🔗 SDK URL", "adm:ads:sdk")],
             [B("🛰 Server verify: " + ("ON" if S.get("ads_postback") else "OFF"), "adm:ads:pb")],
             [B("🛡 AdBlock check: " + ("ON" if S.get("ads_block_adblock") else "OFF"), "adm:ads:ab")],
+            [B("🧪 Test as admin: " + ("ON" if S.get("ads_admin_test") else "OFF"), "adm:ads:tst")],
             [B("🔑 New postback secret", "adm:ads:newsec")],
             [B("🔙 Back", "adm:home")],
         ]),
