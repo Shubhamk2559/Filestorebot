@@ -68,6 +68,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    asyncio.set_event_loop(asyncio.new_event_loop())   # Python 3.12 + uvloop: run_polling needs a current loop
     app = (ApplicationBuilder()
            .token(config.BOT_TOKEN)
            .defaults(Defaults(parse_mode=ParseMode.HTML))
