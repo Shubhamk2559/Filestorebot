@@ -73,6 +73,7 @@ DEFAULTS = {
     "ads_block_adblock": True,    # refuse users running an ad blocker / ad-blocking DNS
     "ads_tries": 3,               # no-fill tries before files are given without an ad
     "ads_last_postback": 0,
+    "ads_admin_test": False,      # show the ad gate to admins too (for testing)
 }
 
 
