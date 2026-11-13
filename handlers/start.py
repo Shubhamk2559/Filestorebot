@@ -351,5 +351,5 @@ async def _unavailable(bot, chat_id):
 async def _config_problem(bot, channel, err):
     await notify_owner(
         bot, "dbch",
-        f"⚠️ Unable to read the Database Channel \"{channel.get('title')}\" ({channel['id']}): {err}\n"
+        f"⚠️ Unable to read the Database Channel \"{channel.get('title')}\": {err}\n"
         "Make sure the bot is an admin there, or set the channel again.")
