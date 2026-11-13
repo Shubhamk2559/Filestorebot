@@ -7,10 +7,12 @@ services:
     environment:
       PORT: "8080"
       BASE_URL: "https://${DOMAIN}"      # overrides BASE_URL from .env so you only maintain DOMAIN
+      STREAM_PREFETCH: "${STREAM_PREFETCH:-16}"            # parallel 1 MiB chunks per viewer (higher = faster)
+      STREAM_MAX_TRANSFERS: "${STREAM_MAX_TRANSFERS:-128}" # parallel Telegram requests, all viewers together
     expose:
       - "8080"                           # only Caddy can reach it; not open to the internet directly
     stop_grace_period: 20s
-    mem_limit: 700m
+    mem_limit: 4g
     logging:
       driver: json-file
       options:
