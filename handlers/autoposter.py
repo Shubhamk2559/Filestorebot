@@ -17,7 +17,7 @@ from telegram import InlineKeyboardMarkup as M
 
 from database import db
 from database.db import settings as S
-from handlers.admin import B, PAGE, action, ask, resolve_channel, show, state
+from handlers.admin import B, PAGE, action, ask, ask_chat, resolve_channel, show, state
 from handlers.upload import media_info
 from utils import autoposter as AP
 from utils import keyboards as K
@@ -55,9 +55,10 @@ async def a_ap(update, context, args):
 
 @action("apadd")
 async def a_apadd(update, context, args):
-    await ask(update, context, "ap_add",
-              "➕ <b>Add Channel / Group</b>\n\nForward a message from it, or send its ID or @username.\n"
-              "The bot must be an <b>admin</b> there (with permission to post).")
+    await ask_chat(update, context, "ap_add",
+                   "➕ <b>Add Channel / Group</b>\n\nChoose where the bot should post.\n"
+                   "If the bot is not an admin there, Telegram will offer to add it.",
+                   channel=True, group=True)
 
 
 @state("ap_add")
@@ -80,7 +81,7 @@ async def show_channel(update, cid: int, note: str = ""):
         return
     total, posted = await db.ap_counts(cid)
     on = ch.get("enabled", True)
-    text = (f"{note}📺 <b>{html.escape(ch['title'])}</b>\n<code>{cid}</code>\n\n"
+    text = (f"{note}📺 <b>{html.escape(ch['title'])}</b>\n\n"
             f"Autoposter: {'ON ✅' if on else 'OFF ⏸'}\n"
             f"⏰ Timings (IST): {AP.fmt_slots(ch.get('slots', []))}\n"
             f"📚 Posts: <b>{total}</b> · ✅ posted {posted} · ⏳ pending {total - posted}")
