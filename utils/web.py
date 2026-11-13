@@ -2,6 +2,7 @@
 utils/web.py - aiohttp server.
 
   GET /ad, POST /api/ad/*, GET /monetag/postback   Monetag rewarded-ad Mini App (utils/ads.py)
+  GET /<token>            permanent share link -> redirects to the current bot on Telegram
   GET /, /health          health checks (Koyeb / Render / Heroku / VPS)
   GET|HEAD /dl/<token>/<msg_id>[?d=1]
                           streams one stored file. Range supported (video seeking, resume).
@@ -103,6 +104,19 @@ async def stream_file(request: web.Request) -> web.StreamResponse:
     return resp
 
 
+async def open_link(request: web.Request) -> web.StreamResponse:
+    """https://yourdomain/<token>  ->  the CURRENT bot (permanent link, survives a bot change)."""
+    token = request.match_info["token"]
+    link = await _valid_link(token)
+    if not link:
+        raise web.HTTPNotFound(text="This link is invalid or has been revoked.")
+    bot = request.app.get("bot")
+    if not bot or not bot.username:
+        raise web.HTTPServiceUnavailable(text="Please try again in a moment.")
+    raise web.HTTPFound(f"https://t.me/{bot.username}?start={token}",
+                        headers={"Cache-Control": "no-store"})
+
+
 async def start_web_server(port: int, bot=None):
     async def health(request):
         try:
@@ -121,6 +135,7 @@ async def start_web_server(port: int, bot=None):
     app.router.add_get("/health", health)
     app.router.add_route("GET", "/dl/{token}/{msg_id}", stream_file)
     app.router.add_route("HEAD", "/dl/{token}/{msg_id}", stream_file)
+    app.router.add_get("/{token:[A-Za-z0-9_-]{6,64}}", open_link)   # keep LAST: fixed routes above win
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", port).start()
