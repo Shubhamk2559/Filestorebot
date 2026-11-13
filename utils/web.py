@@ -10,6 +10,7 @@ utils/web.py - aiohttp server.
 A stream URL is valid only while its share link exists: revoking the link in the panel
 also kills every Stream / Download URL that was handed out for it.
 """
+import asyncio
 import logging
 import time
 from urllib.parse import quote
@@ -86,14 +87,19 @@ async def stream_file(request: web.Request) -> web.StreamResponse:
     if request.method == "HEAD":
         return resp
 
+    gen = streamer.iter_range(info, start, end)
     try:
-        async for chunk in streamer.iter_range(info, start, end):
+        async for chunk in gen:
             await resp.write(chunk)
         await resp.write_eof()
     except (ConnectionResetError, ConnectionError):
         pass  # viewer closed the tab / seeked elsewhere: totally normal
+    except asyncio.CancelledError:
+        raise
     except Exception:
         log.exception("Streaming %s/%s failed", token, msg_id)
+    finally:
+        await gen.aclose()  # cancels the parallel downloads immediately
     return resp
 
 
