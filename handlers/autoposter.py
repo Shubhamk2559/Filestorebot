@@ -360,7 +360,7 @@ async def a_apnew(update, context, args):
                "➕ <b>Create Post</b>\n\n"
                "A file <b>with a caption</b> = the post's thumbnail. All files <b>without a caption</b> right below it "
                "are that post's files (one share link). The next captioned file starts the next post.\n"
-               "📷 An <b>album</b> is always ONE post: all its files in one link.\n\nChoose how:",
+               "📷 A captionless <b>album</b> below a captioned file goes into that post's link.\n\nChoose how:",
                M([[B("🔢 Range: first + last message", f"adm:aprange:{cid}")],
                   [B("📥 Send / forward files, then Done", f"adm:apcollect:{cid}")],
                   [B("🔙 Back", f"adm:apc:{cid}")]]))
