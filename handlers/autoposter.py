@@ -89,7 +89,8 @@ async def show_channel(update, cid: int, note: str = ""):
         [B("⏰ Timings", f"adm:aptm:{cid}"), B(f"📚 All Posts ({total})", f"adm:apall:{cid}:0")],
         [B("➕ Create Post", f"adm:apnew:{cid}"), B("🎨 Caption & Button", f"adm:apcb:{cid}")],
         [B("⏸ Turn OFF" if on else "▶️ Turn ON", f"adm:apon:{cid}")],
-        [B("🔁 Mark all pending", f"adm:apreset:{cid}"), B("🗑 Remove", f"adm:aprm:{cid}")],
+        [B("🔁 Mark all pending", f"adm:apreset:{cid}"), B("🧹 Wipe posts", f"adm:apwipe:{cid}")],
+        [B("🗑 Remove channel", f"adm:aprm:{cid}")],
         [B("🔙 Back", "adm:ap")],
     ]))
 
@@ -322,7 +323,8 @@ async def show_post(update, bot, token: str, note: str = ""):
                f"{note}📝 <b>#{p['seq']}</b> · {'✅ posted' if p['posted'] else '⏳ pending'}\n"
                f"📁 Files: {p['n_files']}\n\n{html.escape(p['title'])}\n\n"
                f"🔗 <code>{share_link(bot.username, token)}</code>",
-               M([[B("📤 Post now", f"adm:appnow:{token}"), B("🗑 Delete", f"adm:apdel:{token}")],
+               M([[B("📤 Post now", f"adm:appnow:{token}")],
+                  [B("🗑 Delete post", f"adm:apdel:{token}:0"), B("🗑 Delete post + link", f"adm:apdel:{token}:1")],
                   [B("🔙 Back", f"adm:apall:{p['chan']}:0")]]))
 
 
@@ -344,9 +346,35 @@ async def a_appnow(update, context, args):
 @action("apdel")
 async def a_apdel(update, context, args):
     p = await db.ap_get_post(args[0])
+    with_link = len(args) > 1 and args[1] == "1"
     await db.ap_delete_post(args[0])
-    await show(update, "🗑 Post deleted from the Autoposter (its share link still works).",
+    if with_link:
+        await db.delete_link(args[0])
+    await show(update,
+               "🗑 Post and its share link deleted." if with_link
+               else "🗑 Post deleted from the Autoposter (its share link still works).",
                K.back(f"apall:{p['chan']}:0" if p else "ap"))
+
+
+@action("apwipe")
+async def a_apwipe(update, context, args):
+    cid = int(args[0])
+    total, posted = await db.ap_counts(cid)
+    await show(update,
+               f"🧹 <b>Wipe posts</b>\n\n📚 {total} post(s) · ✅ posted {posted} · ⏳ pending {total - posted}\n\n"
+               "<b>Posts only</b>: posts leave the Autoposter, old share links keep working.\n"
+               "<b>Posts + links</b>: the share links are deleted too (files stay in the Database Channel).",
+               M([[B("🧹 Wipe ALL posts", f"adm:apwipey:{cid}:a0")],
+                  [B("🧹 Wipe ALL posts + links", f"adm:apwipey:{cid}:a1")],
+                  [B("✅ Wipe only posted ones", f"adm:apwipey:{cid}:p0")],
+                  [B("🔙 Back", f"adm:apc:{cid}")]]))
+
+
+@action("apwipey")
+async def a_apwipey(update, context, args):
+    cid, mode = int(args[0]), args[1]
+    n = await db.ap_wipe(cid, only_posted=mode[0] == "p", links=mode[1] == "1")
+    await show_channel(update, cid, f"🧹 {n} post(s) deleted.\n\n")
 
 
 # ===================================================================== create post
