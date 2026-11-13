@@ -8,6 +8,8 @@ Collections
   links           _id=random token, ids=[DB-channel message ids], label, views
   files           one record per uploaded file (for the Stats screen)
   pending_deletes scheduled auto-deletes (survive bot restarts)
+  ap_channels     Autoposter target channels/groups (timings, ON/OFF)
+  ap_posts        Autoposter posts (thumbnail + share-link token + posted flag)
 """
 import asyncio
 import copy
@@ -30,6 +32,8 @@ files_col = db["files"]
 pending_col = db["pending_deletes"]
 ads_col = db["ad_sessions"]      # one-time Mini App ad sessions (auto-expire)
 usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<links opened today>
+ap_channels_col = db["ap_channels"]   # Autoposter targets: _id=chat id, slots, enabled, done
+ap_posts_col = db["ap_posts"]         # Autoposter posts: _id=share-link token, chan=chat id, seq, posted
 
 # A user can open at most this many links per day (admins are exempt). One link = 1 count, all its files are sent.
 # Day changes at midnight in this timezone.
@@ -117,6 +121,8 @@ async def init_db():
     await usage_col.create_index("expire_at", expireAfterSeconds=0)  # old counters clean themselves
     await ads_col.create_index("expire_at", expireAfterSeconds=0)
     await ads_col.create_index([("uid", 1), ("status", 1)])
+    await ap_posts_col.create_index([("chan", 1), ("seq", 1)])
+    await ap_posts_col.create_index([("chan", 1), ("posted", 1), ("seq", 1)])
     await settings.load()
 
 
@@ -328,3 +334,94 @@ async def set_progress(user_id: int, token: str, n: int):
 async def used_today(user_id: int) -> int:
     doc = await usage_col.find_one({"_id": f"{user_id}:{_today()}"}, {"used": 1})
     return (doc or {}).get("used", 0)
+
+
+# ---------------------------------------------------------------- autoposter
+async def ap_add_channel(cid: int, title: str):
+    await ap_channels_col.update_one(
+        {"_id": cid},
+        {"$set": {"title": title},
+         "$setOnInsert": {"slots": [], "enabled": True, "done": [], "created": time.time()}},
+        upsert=True,
+    )
+
+
+async def ap_get_channel(cid: int):
+    return await ap_channels_col.find_one({"_id": cid})
+
+
+async def ap_list_channels():
+    return await ap_channels_col.find({}).sort("created", 1).to_list(200)
+
+
+async def ap_set(cid: int, **fields):
+    await ap_channels_col.update_one({"_id": cid}, {"$set": fields})
+
+
+async def ap_remove_channel(cid: int):
+    await ap_channels_col.delete_one({"_id": cid})
+    await ap_posts_col.delete_many({"chan": cid})
+
+
+async def ap_claim_slot(cid: int, key: str) -> bool:
+    """Atomically mark '<date> <HH:MM>' as run for this channel. True only for the caller that got it."""
+    r = await ap_channels_col.update_one(
+        {"_id": cid, "done": {"$ne": key}},
+        {"$push": {"done": {"$each": [key], "$slice": -60}}},
+    )
+    return r.modified_count == 1
+
+
+async def ap_last_seq(cid: int) -> int:
+    doc = await ap_posts_col.find_one({"chan": cid}, {"seq": 1}, sort=[("seq", -1)])
+    return int((doc or {}).get("seq", 0))
+
+
+async def ap_add_post(cid: int, token: str, thumb_token: str, seq: int, title: str, cap: str,
+                      kind: str, n_files: int, by: int):
+    """token = the share-link token of the files; thumb_token = backup code token of the thumbnail copy in the DB channel."""
+    await ap_posts_col.insert_one({
+        "_id": token, "chan": cid, "seq": seq, "thumb_token": thumb_token, "title": title,
+        "cap": cap, "kind": kind, "n_files": n_files, "by": by,
+        "posted": False, "posted_at": None, "created": time.time(),
+    })
+
+
+async def ap_get_post(token: str):
+    return await ap_posts_col.find_one({"_id": token})
+
+
+async def ap_list_posts(cid: int, skip: int, limit: int):
+    return await ap_posts_col.find({"chan": cid}).sort("seq", 1).skip(skip).limit(limit).to_list(limit)
+
+
+async def ap_counts(cid: int):
+    total = await ap_posts_col.count_documents({"chan": cid})
+    posted = await ap_posts_col.count_documents({"chan": cid, "posted": True})
+    return total, posted
+
+
+async def ap_pending(cid: int, limit: int):
+    return await ap_posts_col.find({"chan": cid, "posted": False}).sort("seq", 1).limit(limit).to_list(limit)
+
+
+async def ap_pending_count(cid: int) -> int:
+    return await ap_posts_col.count_documents({"chan": cid, "posted": False})
+
+
+async def ap_mark_posted(token: str):
+    await ap_posts_col.update_one({"_id": token}, {"$set": {"posted": True, "posted_at": time.time()}})
+
+
+async def ap_delete_post(token: str):
+    await ap_posts_col.delete_one({"_id": token})
+
+
+async def ap_reset(cid: int):
+    await ap_posts_col.update_many({"chan": cid}, {"$set": {"posted": False, "posted_at": None}})
+
+
+async def thumb_msg_id(code: str):
+    """Current DB-channel message id of a thumbnail (looked up by backup code, so it survives a channel restore)."""
+    doc = await files_col.find_one({"code": code}, {"msg_id": 1})
+    return (doc or {}).get("msg_id")
