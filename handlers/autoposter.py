@@ -87,7 +87,7 @@ async def show_channel(update, cid: int, note: str = ""):
             f"📚 Posts: <b>{total}</b> · ✅ posted {posted} · ⏳ pending {total - posted}")
     await show(update, text, M([
         [B("⏰ Timings", f"adm:aptm:{cid}"), B(f"📚 All Posts ({total})", f"adm:apall:{cid}:0")],
-        [B("➕ Create Post", f"adm:apnew:{cid}")],
+        [B("➕ Create Post", f"adm:apnew:{cid}"), B("🎨 Caption & Button", f"adm:apcb:{cid}")],
         [B("⏸ Turn OFF" if on else "▶️ Turn ON", f"adm:apon:{cid}")],
         [B("🔁 Mark all pending", f"adm:apreset:{cid}"), B("🗑 Remove", f"adm:aprm:{cid}")],
         [B("🔙 Back", "adm:ap")],
@@ -128,6 +128,85 @@ async def a_aprm(update, context, args):
 async def a_aprmyes(update, context, args):
     await db.ap_remove_channel(int(args[0]))
     await show(update, "🗑 Channel removed.", K.back("ap"))
+
+
+# ===================================================================== caption & button
+async def show_cb(update, cid: int, note: str = ""):
+    ch = await db.ap_get_channel(cid)
+    if not ch:
+        await show(update, "⚠️ Channel not found.", K.back("ap"))
+        return
+    tpl = ch.get("cap_tpl") or "{caption}"
+    btn = ch.get("btn") or AP.DEFAULT_BTN
+    await show(update,
+               f"{note}🎨 <b>Caption &amp; Button</b> — {html.escape(ch['title'])}\n\n"
+               f"📝 Caption:\n<code>{html.escape(tpl)}</code>\n"
+               f"🔘 Button: <b>{html.escape(btn)}</b>\n\n"
+               "Applies to every post of this channel (also the ones already created).",
+               M([[B("📝 Edit Caption", f"adm:apcap:{cid}"), B("🔘 Edit Button", f"adm:apbtn:{cid}")],
+                  [B("♻️ Reset to default", f"adm:apcbr:{cid}")],
+                  [B("🔙 Back", f"adm:apc:{cid}")]]))
+
+
+@action("apcb")
+async def a_apcb(update, context, args):
+    await show_cb(update, int(args[0]))
+
+
+@action("apcbr")
+async def a_apcbr(update, context, args):
+    cid = int(args[0])
+    await db.ap_set(cid, cap_tpl="", btn="")
+    await show_cb(update, cid, "♻️ Reset.\n\n")
+
+
+@action("apcap")
+async def a_apcap(update, context, args):
+    context.user_data["ap_cid"] = int(args[0])
+    await ask(update, context, "ap_cap",
+              "📝 <b>Post caption</b>\n\nSend the caption text (bold / italic / links work).\n"
+              "Write <code>{caption}</code> where the post's own caption should go, e.g.\n"
+              "<code>🔥 {caption}\n\n👇 Download below</code>\n\n"
+              "Without <code>{caption}</code> every post gets exactly this text.\n"
+              "Send <code>-</code> to use only the post's own caption.")
+
+
+@state("ap_cap")
+async def st_ap_cap(update, context):
+    msg = update.effective_message
+    cid = context.user_data.get("ap_cid")
+    if not msg.text or cid is None:
+        await msg.reply_text("⚠️ Send the caption as text.", reply_markup=K.cancel())
+        return
+    tpl = "" if msg.text.strip() == "-" else msg.text_html.strip()
+    if AP._plain_len(tpl.replace("{caption}", "")) > AP.CAPTION_MAX - 100:
+        await msg.reply_text("⚠️ Too long (Telegram caption limit is 1024).", reply_markup=K.cancel())
+        return
+    await db.ap_set(cid, cap_tpl=tpl)
+    context.user_data.pop("state", None)
+    await msg.reply_text("✅ Caption saved.", reply_markup=K.back(f"apcb:{cid}"))
+
+
+@action("apbtn")
+async def a_apbtn(update, context, args):
+    context.user_data["ap_cid"] = int(args[0])
+    await ask(update, context, "ap_btn",
+              f"🔘 <b>Button text</b>\n\nSend the text for the button under every post "
+              f"(max {AP.BTN_MAX} characters, emoji ok), e.g. <code>⬇️ Download Now</code>\n"
+              f"Send <code>-</code> for the default ({AP.DEFAULT_BTN}).")
+
+
+@state("ap_btn")
+async def st_ap_btn(update, context):
+    msg = update.effective_message
+    cid = context.user_data.get("ap_cid")
+    txt = (msg.text or "").strip()
+    if not txt or cid is None or len(txt) > AP.BTN_MAX:
+        await msg.reply_text(f"⚠️ Send text up to {AP.BTN_MAX} characters.", reply_markup=K.cancel())
+        return
+    await db.ap_set(cid, btn="" if txt == "-" else txt)
+    context.user_data.pop("state", None)
+    await msg.reply_text("✅ Button saved.", reply_markup=K.back(f"apcb:{cid}"))
 
 
 # ===================================================================== timings
@@ -280,7 +359,8 @@ async def a_apnew(update, context, args):
     await show(update,
                "➕ <b>Create Post</b>\n\n"
                "A file <b>with a caption</b> = the post's thumbnail. All files <b>without a caption</b> right below it "
-               "are that post's files (one share link). The next captioned file starts the next post.\n\nChoose how:",
+               "are that post's files (one share link). The next captioned file starts the next post.\n"
+               "📷 An <b>album</b> is always ONE post: all its files in one link.\n\nChoose how:",
                M([[B("🔢 Range: first + last message", f"adm:aprange:{cid}")],
                   [B("📥 Send / forward files, then Done", f"adm:apcollect:{cid}")],
                   [B("🔙 Back", f"adm:apc:{cid}")]]))
