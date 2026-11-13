@@ -14,6 +14,7 @@ from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandl
 import config
 from database import db
 from handlers import admin, start, upload
+from utils.links import register_bot
 from utils.streamer import streamer
 from utils.web import start_web_server
 from utils.scheduler import autodelete_loop
@@ -28,6 +29,7 @@ async def post_init(app):
     app.bot_data["health"] = await start_web_server(config.PORT, app.bot)   # /health + /dl/<token>/<id> streaming
     await streamer.start()                               # MTProto engine (needs API_ID, API_HASH, BASE_URL)
     app.bot_data["gc"] = asyncio.create_task(autodelete_loop(app.bot))
+    app.bot_data["reg"] = asyncio.create_task(register_bot(app.bot.username))   # links -> this bot (Cloudflare Worker)
     log.info("Bot @%s started (web on :%s, streaming %s)", app.bot.username, config.PORT,
              "ON" if streamer.ready else f"OFF ({streamer.error})")
 
