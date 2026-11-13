@@ -310,3 +310,8 @@ async def set_progress(user_id: int, token: str, n: int):
     """n = how many files of this link the user already got; 0 clears it (link finished)."""
     op = {"$set": {f"prog.{token}": n}} if n else {"$unset": {f"prog.{token}": ""}}
     await users_col.update_one({"_id": user_id}, op, upsert=True)
+
+
+async def used_today(user_id: int) -> int:
+    doc = await usage_col.find_one({"_id": f"{user_id}:{_today()}"}, {"used": 1})
+    return (doc or {}).get("used", 0)
