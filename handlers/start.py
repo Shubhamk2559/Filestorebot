@@ -19,6 +19,7 @@ from database import db
 from database.db import settings as S
 from handlers import admin
 from utils.helpers import call, is_admin, notify_owner, render_caption, retry_seconds
+from utils import ads
 from utils.membership import get_missing
 from utils.streamer import human_size, streamer
 import config
@@ -57,7 +58,7 @@ async def handle_token(context, user, chat_id: int, token: str):
         if missing:
             await send_gate(context, user, chat_id, token, missing)
             return
-    await deliver(context.bot, chat_id, link)
+    await request_access(context.bot, chat_id, link)
 
 
 # ------------------------------------------------------------------ join screen
@@ -118,7 +119,7 @@ async def check_callback(update, context):
     if not link:
         await call(context.bot.send_message, q.message.chat_id, "❌ This link is invalid or has been revoked.")
         return
-    await deliver(context.bot, q.message.chat_id, link)
+    await request_access(context.bot, q.message.chat_id, link)
 
 
 # ------------------------------------------------------------------ delivery
@@ -157,6 +158,23 @@ def _caption_override():
     return "" if S.get("remove_caption") else None
 
 
+async def _limit_reached(bot, chat_id: int):
+    await call(bot.send_message, chat_id,
+               f"🚫 <b>Daily limit reached</b>\n\nYou can get only <b>{db.limit_value()}</b> files per day. "
+               "Please come back tomorrow (resets at 12:00 AM IST).", parse_mode=ParseMode.HTML)
+
+
+async def request_access(bot, chat_id: int, link: dict):
+    """Entry point for a user who passed force-subscribe: daily limit -> Monetag ad gate -> files."""
+    if not is_admin(chat_id):
+        if await db.used_today(chat_id) >= db.limit_value():   # don't make them watch an ad for nothing
+            await _limit_reached(bot, chat_id)
+            return
+        if await ads.gate(bot, chat_id, link):                  # Mini App button sent; files follow after the ad
+            return
+    await deliver(bot, chat_id, link)
+
+
 async def deliver(bot, chat_id: int, link: dict):
     """Daily-limit gate (10 files per user per day, admins exempt), then deliver."""
     ids = [i for i in link["ids"] if i]          # slots not restored yet are None
@@ -174,9 +192,7 @@ async def deliver(bot, chat_id: int, link: dict):
         start = 0
     granted = await db.reserve_quota(chat_id, len(ids) - start)
     if granted <= 0:
-        await call(bot.send_message, chat_id,
-                   f"🚫 <b>Daily limit reached</b>\n\nYou can get only <b>{limit}</b> files per day. "
-                   "Please come back tomorrow (resets at 12:00 AM IST).", parse_mode=ParseMode.HTML)
+        await _limit_reached(bot, chat_id)
         return
 
     part = ids[start:start + granted]
