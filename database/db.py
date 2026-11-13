@@ -29,9 +29,9 @@ links_col = db["links"]
 files_col = db["files"]
 pending_col = db["pending_deletes"]
 ads_col = db["ad_sessions"]      # one-time Mini App ad sessions (auto-expire)
-usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<files received today>
+usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<links opened today>
 
-# A user can receive at most this many files per day (admins are exempt).
+# A user can open at most this many links per day (admins are exempt). One link = 1 count, all its files are sent.
 # Day changes at midnight in this timezone.
 DAILY_LIMIT = 10
 LIMIT_TZ = ZoneInfo("Asia/Kolkata")
@@ -63,7 +63,7 @@ DEFAULTS = {
     "shortener_enabled": False,
     "shortener_url": "",
     "shortener_key": "",
-    "daily_limit": 10,            # files per user per day (admins exempt)
+    "daily_limit": 10,            # links per user per day (admins exempt)
     # ---- Monetag rewarded ads (Telegram Mini App) - all configured from the Ads screen of the panel
     "ads_enabled": False,
     "ads_zone": "",               # Monetag main SDK zone id
@@ -291,7 +291,7 @@ def limit_value() -> int:
 
 
 async def reserve_quota(user_id: int, wanted: int) -> int:
-    """Atomically take up to `wanted` files from today's allowance. Returns how many were granted (0 = used up)."""
+    """Atomically take up to `wanted` links from today's allowance. Returns how many were granted (0 = used up)."""
     lock = _quota_locks.setdefault(user_id, asyncio.Lock())
     async with lock:
         key = f"{user_id}:{_today()}"
@@ -308,7 +308,7 @@ async def reserve_quota(user_id: int, wanted: int) -> int:
 
 
 async def refund_quota(user_id: int, n: int):
-    """Give back files that were reserved but could not be delivered."""
+    """Give back a link count that was reserved but could not be delivered."""
     if n > 0:
         await usage_col.update_one({"_id": f"{user_id}:{_today()}"}, {"$inc": {"used": -n}})
 
