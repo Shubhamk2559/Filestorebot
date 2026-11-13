@@ -112,7 +112,7 @@ async def check_callback(update, context):
         pass
     if not token:
         await call(context.bot.send_message, q.message.chat_id,
-                   "✅ Verified! Now open a file link to receive your files.")
+                   f"✅ Verified! Now open a file link to receive your files.\n\n📊 Daily limit: {db.limit_value()} files per user per day.")
         return
     link = await db.get_link(token)
     if not link:
@@ -185,10 +185,13 @@ async def deliver(bot, chat_id: int, link: dict):
 
     end = start + delivered
     await db.set_progress(chat_id, token, end if end < len(ids) else 0)
+
+    used = await db.used_today(chat_id)
+    text = f"📊 <b>Daily limit:</b> {used}/{limit} files used today · {max(0, limit - used)} left"
     if end < len(ids):
-        await call(bot.send_message, chat_id,
-                   f"ℹ️ Daily limit of <b>{limit}</b> files reached. Sent {end}/{len(ids)} files of this link.\n"
-                   "Open the same link tomorrow to get the rest.", parse_mode=ParseMode.HTML)
+        text += (f"\n\nℹ️ Limit reached. Sent {end}/{len(ids)} files of this link. "
+                 "Open the same link tomorrow (after 12:00 AM IST) to get the rest.")
+    await call(bot.send_message, chat_id, text, parse_mode=ParseMode.HTML)
 
 
 async def _deliver(bot, chat_id: int, link: dict) -> int:
