@@ -37,7 +37,7 @@ from utils.helpers import call
 log = logging.getLogger(__name__)
 
 FORMAT = 1
-COLLECTIONS = ("settings", "users", "links", "files", "ap_channels", "ap_posts")   # whitelist for restore
+COLLECTIONS = ("settings", "users", "links", "files", "ap_channels", "ap_posts", "daily_stats")   # whitelist for restore
 PART_LIMIT = 15 * 1024 * 1024        # compressed bytes per part (Bot API download limit is 20 MB)
 AUTO_EVERY = 24 * 3600
 JSON_OPTS = json_util.CANONICAL_JSON_OPTIONS
@@ -184,17 +184,19 @@ def parse_part(data: bytes) -> dict:
 
 # ------------------------------------------------------------------ restoring
 async def _restore_settings(items: list, mode: str):
-    doc = dict(items[0]) if items else {}
-    doc.pop("_id", None)
-    if not doc:
-        return
-    if mode == "full":
-        await db.settings_col.replace_one({"_id": "main"}, {"_id": "main", **doc}, upsert=True)
-        return
-    existing = await db.settings_col.find_one({"_id": "main"}) or {}
-    missing = {k: v for k, v in doc.items() if k not in existing}
-    if missing:
-        await db.settings_col.update_one({"_id": "main"}, {"$set": missing}, upsert=True)
+    """The settings collection holds several documents (_id "main" = panel settings, "ad_stats" = ad counters)."""
+    for d in items:
+        doc = dict(d)
+        sid = doc.pop("_id", None)
+        if not sid or not doc:
+            continue
+        if mode == "full":
+            await db.settings_col.replace_one({"_id": sid}, {"_id": sid, **doc}, upsert=True)
+            continue
+        existing = await db.settings_col.find_one({"_id": sid}) or {}
+        missing = {k: v for k, v in doc.items() if k not in existing}
+        if missing:
+            await db.settings_col.update_one({"_id": sid}, {"$set": missing}, upsert=True)
 
 
 async def _restore_collection(name: str, items: list, mode: str):
