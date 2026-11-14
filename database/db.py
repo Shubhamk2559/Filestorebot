@@ -8,11 +8,12 @@ Collections
   links           _id=random token, ids=[DB-channel message ids], label, views
   files           one record per uploaded file (for the Stats screen)
   pending_deletes scheduled auto-deletes (survive bot restarts)
-  ap_channels     Autoposter target channels/groups (timings, ON/OFF)
+  ap_channels     Autoposter target channels/groups (timings, ON/OFF, loop mode, shuffled queue_state)
   ap_posts        Autoposter posts (thumbnail + share-link token + posted flag)
 """
 import copy
 import datetime as dt
+import random
 import re
 import secrets
 import time
@@ -413,11 +414,17 @@ async def used_today(user_id: int) -> int:
 
 
 # ---------------------------------------------------------------- autoposter
+def _blank_queue() -> dict:
+    return {"cycle": 0, "cursor": 0, "queue": [], "shuffle_status": "idle", "last_batch_size": 0,
+            "last_posted_at": None, "last_reshuffled_at": None, "last_post_id": None}
+
+
 async def ap_add_channel(cid: int, title: str):
     await ap_channels_col.update_one(
         {"_id": cid},
         {"$set": {"title": title},
-         "$setOnInsert": {"slots": [], "enabled": True, "done": [], "created": time.time()}},
+         "$setOnInsert": {"slots": [], "enabled": True, "done": [], "created": time.time(),
+                          "loop": True, "queue_state": _blank_queue()}},
         upsert=True,
     )
 
@@ -501,11 +508,86 @@ async def ap_wipe(cid: int, only_posted: bool = False, links: bool = False) -> i
         await ap_posts_col.delete_many({"_id": {"$in": tokens}})
         if links:
             await links_col.delete_many({"_id": {"$in": tokens}})
+        await ap_channels_col.update_one({"_id": cid}, {"$set": {"queue_state": _blank_queue()}})
     return len(tokens)
 
 
 async def ap_reset(cid: int):
     await ap_posts_col.update_many({"chan": cid}, {"$set": {"posted": False, "posted_at": None}})
+
+
+# ---- shuffled queue (cycle = every post once in random order; cursor = how far the cycle has got)
+async def ap_rebuild_cycle(cid: int, only_unused: bool = False):
+    """Full rebuild = every post, all marked pending, freshly shuffled (new cycle).
+    only_unused = only the posts not yet posted (used when one-pass mode / first start of an old channel)."""
+    ch = await ap_channels_col.find_one({"_id": cid})
+    if not ch:
+        return None
+    qs = ch.get("queue_state") or {}
+    flt = {"chan": cid, **({"posted": False} if only_unused else {})}
+    ids = [d["_id"] for d in await ap_posts_col.find(flt, {"_id": 1}).to_list(None)]
+    random.shuffle(ids)
+    last = qs.get("last_post_id")
+    if len(ids) > 1 and ids[0] == last:      # never open a cycle with the post that closed the last one
+        j = random.randrange(1, len(ids))
+        ids[0], ids[j] = ids[j], ids[0]
+    if not only_unused:
+        await ap_posts_col.update_many({"chan": cid}, {"$set": {"posted": False, "posted_at": None}})
+    prev = int(qs.get("cycle", 0))
+    cycle = prev + 1 if ids and not (only_unused and prev > 0) else prev
+    new_qs = {"cycle": cycle, "cursor": 0, "queue": ids, "shuffle_status": "ready" if ids else "empty",
+              "last_batch_size": 0, "last_posted_at": qs.get("last_posted_at"),
+              "last_reshuffled_at": time.time(), "last_post_id": last}
+    return await ap_channels_col.find_one_and_update(
+        {"_id": cid}, {"$set": {"queue_state": new_qs}}, return_document=ReturnDocument.AFTER)
+
+
+async def ap_enqueue_new(cid: int, tokens: list):
+    """New posts are mixed (shuffled) into the part of the running cycle that is still to be posted."""
+    if not tokens:
+        return
+    ch = await ap_channels_col.find_one({"_id": cid})
+    qs = (ch or {}).get("queue_state") or {}
+    queue, cursor = list(qs.get("queue") or []), int(qs.get("cursor", 0))
+    if not queue or cursor >= len(queue):
+        return                                # no running cycle: the next rebuild includes them
+    rest = queue[cursor:] + [str(t) for t in tokens]
+    random.shuffle(rest)
+    await ap_channels_col.update_one(
+        {"_id": cid}, {"$set": {"queue_state.queue": queue[:cursor] + rest, "queue_state.shuffle_status": "ready"}})
+
+
+async def ap_advance(cid: int, token: str):
+    """A post of the queue was published: mark it posted and move the cursor."""
+    now = time.time()
+    await ap_posts_col.update_one({"_id": token}, {"$set": {"posted": True, "posted_at": now}})
+    await ap_channels_col.update_one(
+        {"_id": cid},
+        {"$inc": {"queue_state.cursor": 1},
+         "$set": {"queue_state.last_posted_at": now, "queue_state.last_post_id": token}})
+
+
+async def ap_skip_cursor(cid: int):
+    await ap_channels_col.update_one({"_id": cid}, {"$inc": {"queue_state.cursor": 1}})
+
+
+async def ap_finalize(cid: int, sent: int, exhausted: bool):
+    await ap_channels_col.update_one(
+        {"_id": cid},
+        {"$set": {"queue_state.last_batch_size": sent,
+                  "queue_state.shuffle_status": "cycle complete • awaiting next shuffle" if exhausted else "in progress"}})
+
+
+async def ap_upcoming(cid: int, limit: int = 10) -> list:
+    """The next not-yet-posted posts, in queue order (for the Queue screen)."""
+    ch = await ap_channels_col.find_one({"_id": cid})
+    qs = (ch or {}).get("queue_state") or {}
+    queue, cursor = qs.get("queue") or [], int(qs.get("cursor", 0))
+    window = queue[cursor:cursor + limit * 4]
+    if not window:
+        return []
+    docs = {d["_id"]: d for d in await ap_posts_col.find({"_id": {"$in": window}, "chan": cid}).to_list(None)}
+    return [docs[t] for t in window if t in docs and not docs[t].get("posted")][:limit]
 
 
 async def thumb_msg_id(code: str):
