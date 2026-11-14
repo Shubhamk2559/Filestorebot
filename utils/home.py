@@ -162,9 +162,9 @@ small{{display:block;margin-top:22px;color:#b98aa6;font-size:.78rem}}
 {img_tag}
 <h1><span class="a">{t1}</span><span class="b">{t2}</span></h1>
 <div class="glass"><p>{text}</p></div>
-<a class="btn" href="{link}">{plane}<span>{button}</span></a>
 <h2>Join Our Channels</h2>
 <nav class="chs">{chans}</nav>
+<a class="btn" style="margin-top:18px" href="{link}">{plane}<span>{button}</span></a>
 <div class="on"><b></b>Always Online ♡</div>
 <small>18+ only. By continuing you confirm you are an adult.</small>
 </main></body></html>"""
