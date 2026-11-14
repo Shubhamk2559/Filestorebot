@@ -11,6 +11,8 @@ handlers/start.py   /start, force-sub gate, "I've Joined", file delivery
 handlers/admin.py   the whole admin panel (buttons + state machine)
 handlers/upload.py  admin uploads, batch mode, link creation
 handlers/broadcast.py  broadcast with progress + flood control
+handlers/usage.py   VPS Usage + Contabo plan advice screens (owner only)
+utils/usage.py      CPU/RAM/bandwidth sampler, hourly stats in MongoDB, plan recommender
 utils/              helpers, keyboards, membership check, scheduler, web server (/health, /dl, /ad)
 ```
 
@@ -75,3 +77,10 @@ Put your own reverse proxy (nginx/Caddy, `proxy_buffering off`) in front of port
 - **🐢 / ⚖️ / ⚡ Speed** – change the pause between requests live.
 - **Live counts** – videos, photos, files, audio, text … found in the source vs. transferred, plus *Not forwarded* (with reason, message links and **🔁 Retry failed**).
 - **🗑 Delete copied files** – removes exactly the messages the bot copied into a destination in one go (ids are stored in MongoDB, so it also works after a restart). **🧹 Wipe a whole chat** deletes *everything* in a chat (e.g. Saved Messages) after a confirmation.
+
+## 🖥 VPS Usage & Contabo plan advice (Panel → VPS Usage, owner only)
+- The bot samples CPU, RAM, network speed and live streaming viewers every 15 s and saves one small record per hour (kept ~13 months, IST days).
+- **Daily** (7 days) · **Weekly** (8 weeks) · **Monthly** (6 months) tables: CPU/RAM average + peak, data sent, highest Mbps. Monthly also shows the busiest hours and weekdays.
+- **💡 Plan advice** picks the cheapest Contabo plan that fits your real peaks (70 % CPU target, +40 % RAM, +30 % disk/speed headroom), tells which plan your VPS looks like and how much you would save. It needs ~2 weeks of data to be reliable.
+- Plan prices are approximate: check https://contabo.com/en/pricing/ and edit `DEFAULT_PLANS` in `utils/usage.py`, or set `CONTABO_PLANS_JSON` in `.env`.
+- Files sent inside Telegram chats use Telegram's servers, not your VPS. Only Stream/Download links, ads page and uploads use VPS bandwidth.

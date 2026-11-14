@@ -23,6 +23,7 @@ from handlers import autoposter as _autoposter  # noqa: F401  (registers the Aut
 from handlers import backup as _backup          # registers the Backup / Restore screens
 from handlers import analytics as _analytics    # registers the Earnings / Analytics screens
 from handlers import transfer as _transfer      # registers the Transfer screens (user-account channel copy)
+from handlers import usage as _usage            # registers the VPS Usage / Plan advice screens
 from utils.backup import backup_loop
 from utils import padding
 from utils.links import register_bot
@@ -30,6 +31,7 @@ from utils.streamer import streamer
 from utils.web import start_web_server
 from utils.scheduler import autodelete_loop
 from utils.autoposter import autopost_loop
+from utils.usage import usage_loop
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=config.LOG_LEVEL)
 logging.getLogger("httpx").setLevel(logging.WARNING)  # don't log every Bot API call (leaks the token)
@@ -43,6 +45,7 @@ async def post_init(app):
     app.bot_data["gc"] = asyncio.create_task(autodelete_loop(app.bot))
     app.bot_data["ap"] = asyncio.create_task(autopost_loop(app.bot))     # Autoposter scheduler
     app.bot_data["bk"] = asyncio.create_task(backup_loop(app.bot))      # daily auto-backup to the owner
+    app.bot_data["us"] = asyncio.create_task(usage_loop())              # VPS usage sampler (CPU / RAM / bandwidth)
     app.bot_data["reg"] = asyncio.create_task(register_bot(app.bot.username))   # links -> this bot (Cloudflare Worker)
     log.info("Bot @%s started (web on :%s, streaming %s)", app.bot.username, config.PORT,
              "ON" if streamer.ready else f"OFF ({streamer.error})")
@@ -54,7 +57,7 @@ async def post_shutdown(app):
     await streamer.stop()
     from utils.transfer import session as _tr_session
     await _tr_session.stop()
-    for key in ("gc", "ap", "bk"):
+    for key in ("gc", "ap", "bk", "us"):
         task = app.bot_data.get(key)
         if task:
             task.cancel()
