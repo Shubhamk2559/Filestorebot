@@ -22,6 +22,7 @@ import hmac
 import hashlib
 import json
 import logging
+import math
 import re
 import secrets
 import time
@@ -94,6 +95,7 @@ async def postback_url() -> str:
 
 async def bump(field: str):
     await db.settings_col.update_one({"_id": "ad_stats"}, {"$inc": {field: 1}}, upsert=True)
+    await db.stat_inc(**{field: 1})                       # same counter per day (Analytics screen)
 
 
 async def get_stats() -> dict:
@@ -166,6 +168,7 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
                                web_app=WebAppInfo(url=f"{config.BASE_URL}/ad?s={sid}"))]]),
             parse_mode=ParseMode.HTML)
         await db.ads_col.update_one({"_id": sid}, {"$set": {"msg_id": msg.message_id}})
+        await db.stat_inc(gates=1)
     except TelegramError as e:
         log.warning("Ad gate could not be sent: %s", e)
         await notify_owner(bot, "ads_send",
@@ -397,6 +400,15 @@ async def _deliver_after_ad(bot, s):
 
 
 # ------------------------------------------------------------------ Monetag postback (server to server)
+def _price(raw) -> float:
+    """estimated_price from the postback (USD). Anything odd counts as 0."""
+    try:
+        v = float(str(raw or "").strip())
+    except ValueError:
+        return 0.0
+    return v if math.isfinite(v) and 0 < v < 1000 else 0.0
+
+
 async def postback(request):
     q = request.query
     if not hmac.compare_digest(q.get("secret", ""), S.get("ads_secret") or secrets.token_hex(8)):
@@ -404,6 +416,15 @@ async def postback(request):
     sid = q.get("ymid", "")[:64]
     if time.time() - (S.get("ads_last_postback") or 0) > 60:
         await S.set("ads_last_postback", time.time())
+    ev_type = q.get("event_type")
+    if ev_type in ("impression", "click"):                 # Analytics: ads shown, clicks and Monetag's estimated revenue
+        inc = {"imp" if ev_type == "impression" else "clk": 1}
+        price = _price(q.get("estimated_price"))
+        if price:
+            inc["rev"] = price
+        if ev_type == "impression" and q.get("reward_event_type") == "valued":
+            inc["valued"] = 1
+        await db.stat_inc(**inc)
     if q.get("event_type") in ("impression", "click") and re.fullmatch(r"[0-9a-f]{24}", sid):
         s = await db.ads_col.find_one({"_id": sid})
         tid = q.get("telegram_id", "")
