@@ -36,4 +36,5 @@ def main_panel(owner: bool):
     rows.append(last)
     if owner:
         rows.append([B("📈 Earnings", callback_data="adm:an"), B("💾 Backup", callback_data="adm:bk")])
+        rows.append([B("🔄 Transfer", callback_data="adm:tr")])
     return M(rows)
