@@ -62,7 +62,7 @@ def B(text, callback_data):
 NOPREVIEW = LinkPreviewOptions(is_disabled=True)
 PAGE = 8
 MAX_RANGE = 10000
-TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts")
+TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst")
 
 ACTIONS = {}
 STATES = {}
