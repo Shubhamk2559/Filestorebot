@@ -5,6 +5,10 @@ utils/home.py - landing page served at https://<your-domain>/
   * link    : the button opens your bot (t.me/<bot username>) automatically.
               Set HOME_LINK in .env to point it somewhere else (e.g. your channel).
   * texts   : HOME_TITLE, HOME_TEXT, HOME_BUTTON in .env (all optional)
+  * channels: the 5 buttons below the main button. Link for each channel is taken from (in this order)
+              1) HOME_CHANNELS in .env:  Pookie Hub=https://t.me/xxx;Lust Corner=https://t.me/yyy;...
+              2) a Force-Sub channel in the panel with the SAME name (its join link is reused)
+              3) your bot link (fallback, so a button is never dead)
   * theme   : neon pink / dark, round image with glowing ring, floating hearts + sparkles, rotating neon ring, shimmer title
 """
 import html
@@ -33,6 +37,28 @@ def _link(bot) -> str:
     return f"https://t.me/{bot.username}" if bot and getattr(bot, "username", None) else "#"
 
 
+CHANNELS = [("Pookie Hub", "🎀"), ("Lust Corner", "🔥"), ("Desi Hub", "🌶"), ("Premium Hub", "💎"),
+            ("Trending Reels", "🎬")]
+
+
+def _channel_links() -> dict:
+    """{lowercase name: url} from HOME_CHANNELS, then from Force-Sub channels with the same title."""
+    out = {}
+    try:
+        from database.db import settings as S
+        for c in S.get("fsub_channels") or []:
+            title, url = (c.get("title") or "").strip().lower(), (c.get("link") or "").strip()
+            if title and url:
+                out[title] = url
+    except Exception:
+        pass
+    for part in os.getenv("HOME_CHANNELS", "").split(";"):
+        name, _, url = part.partition("=")
+        if name.strip() and url.strip():
+            out[name.strip().lower()] = url.strip()
+    return out
+
+
 async def image(request: web.Request) -> web.StreamResponse:
     path, mime = _image()
     if not path:
@@ -55,6 +81,10 @@ async def page(request: web.Request) -> web.Response:
     plane = ('<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="#fff" '
              'd="M21.9 3.6 2.8 10.9c-1.3.5-1.3 1.3-.2 1.6l4.9 1.5 1.9 5.8c.2.6.1.8.7.8.4 0 .6-.2.9-.5l2.3-2.3 4.8 3.5'
              'c.9.5 1.5.2 1.7-.8l3.2-15.1c.3-1.2-.5-1.8-1.4-1.4ZM8.5 13.6l9.9-6.2c.5-.3.9-.1.5.2l-8.1 7.3-.3 3.3-2-4.6Z"/></svg>')
+    links = _channel_links()
+    chans = "".join(
+        f'<a class="ch" href="{html.escape(links.get(n.lower()) or _link(request.app.get("bot")), quote=True)}" '
+        f'target="_blank" rel="noopener"><em>{ico}</em><span>{html.escape(n)}</span></a>' for n, ico in CHANNELS)
     glyphs = ["♥", "✦", "💋", "♥", "✦", "♥", "💋", "✦", "♥"]
     stars = "".join(f'<i style="left:{x}%;animation-delay:{d}s;animation-duration:{t}s;font-size:{z}px">{g}</i>'
                     for (x, d, t, z), g in zip([(6, 0, 11, 16), (18, 3, 14, 13), (30, 6, 12, 18), (44, 1, 15, 14),
@@ -119,6 +149,14 @@ transform:skewX(-20deg);animation:sweep 3s ease-in-out infinite}}
 .btn:active{{transform:scale(.98)}}
 .btn svg{{position:relative;z-index:1}}.btn span{{position:relative;z-index:1}}
 @keyframes pulse{{50%{{transform:scale(1.03)}}}}
+h2{{margin:28px 0 12px;font-family:Pacifico,cursive;font-weight:400;font-size:1.45rem;color:#fff;text-shadow:0 0 16px rgba(255,45,149,.9)}}
+.chs{{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%}}
+.chs .ch:last-child{{grid-column:1/-1}}
+.ch{{display:flex;align-items:center;justify-content:center;gap:9px;padding:15px 10px;border-radius:16px;color:#fff;text-decoration:none;font-weight:700;
+font-size:.98rem;background:linear-gradient(160deg,rgba(255,45,149,.2),rgba(122,11,60,.35));border:1.5px solid rgba(255,124,207,.6);
+box-shadow:0 0 16px rgba(255,45,149,.35),0 0 14px rgba(255,45,149,.2) inset;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}}
+.ch em{{font-style:normal;font-size:1.25rem;filter:drop-shadow(0 0 6px rgba(255,45,149,.9))}}
+.ch:active{{transform:scale(.97);box-shadow:0 0 24px rgba(255,45,149,.7)}}
 .hint{{margin-top:12px;color:var(--pink2);font-size:.9rem;letter-spacing:.4px}}
 .on{{margin-top:16px;color:var(--pink2);font-family:Pacifico,cursive;font-size:1.2rem;text-shadow:0 0 14px rgba(255,45,149,.8)}}
 .on b{{display:inline-block;width:9px;height:9px;border-radius:50%;background:#3dff8b;margin-right:8px;box-shadow:0 0 10px #3dff8b;animation:blink 1.6s infinite}}
@@ -136,6 +174,8 @@ small{{display:block;margin-top:22px;color:#b98aa6;font-size:.78rem}}
 <ul><li>Fast</li><li>Secure</li><li>Unlimited</li></ul>
 <a class="btn" href="{link}">{plane}<span>{button}</span></a>
 <div class="hint">🔥 Private &middot; Instant &middot; Just for you</div>
+<h2>Join Our Channels</h2>
+<nav class="chs">{chans}</nav>
 <div class="on"><b></b>Always Online ♡</div>
 <small>18+ only. By continuing you confirm you are an adult.</small>
 </main></body></html>"""
