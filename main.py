@@ -22,6 +22,7 @@ from handlers import admin, start, upload
 from handlers import autoposter as _autoposter  # noqa: F401  (registers the Autoposter panel screens)
 from handlers import backup as _backup          # registers the Backup / Restore screens
 from handlers import analytics as _analytics    # registers the Earnings / Analytics screens
+from handlers import transfer as _transfer      # registers the Transfer screens (user-account channel copy)
 from utils.backup import backup_loop
 from utils import padding
 from utils.links import register_bot
@@ -51,6 +52,8 @@ async def post_init(app):
 
 async def post_shutdown(app):
     await streamer.stop()
+    from utils.transfer import session as _tr_session
+    await _tr_session.stop()
     for key in ("gc", "ap", "bk"):
         task = app.bot_data.get(key)
         if task:
