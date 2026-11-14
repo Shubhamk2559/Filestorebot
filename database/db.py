@@ -46,6 +46,7 @@ ads_col = db["ad_sessions"]      # one-time Mini App ad sessions (auto-expire)
 usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<links opened today>
 ap_channels_col = db["ap_channels"]   # Autoposter targets: _id=chat id, slots, enabled, done
 ap_posts_col = db["ap_posts"]         # Autoposter posts: _id=share-link token, chan=chat id, seq, posted
+vps_col = db["vps_usage"]             # _id="YYYY-MM-DD-HH" (IST): hourly VPS samples (cpu, ram, network, streams) - utils/usage.py
 stats_col = db["daily_stats"]         # _id="YYYY-MM-DD" (IST): views, gates, imp, clk, valued, rev, verified, fallback, blocked
 
 # A user can open at most this many links per day (admins are exempt). One link = 1 count, all its files are sent.
@@ -133,6 +134,7 @@ async def init_db():
     await files_col.create_index("code")
     await usage_col.create_index("expire_at", expireAfterSeconds=0)  # old counters clean themselves
     await ads_col.create_index("expire_at", expireAfterSeconds=0)
+    await vps_col.create_index("expire_at", expireAfterSeconds=0)   # VPS usage history is kept ~13 months
     await ads_col.create_index([("uid", 1), ("status", 1)])
     await ap_posts_col.create_index([("chan", 1), ("seq", 1)])
     await ap_posts_col.create_index([("chan", 1), ("posted", 1), ("seq", 1)])
