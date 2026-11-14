@@ -45,6 +45,7 @@ ads_col = db["ad_sessions"]      # one-time Mini App ad sessions (auto-expire)
 usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<links opened today>
 ap_channels_col = db["ap_channels"]   # Autoposter targets: _id=chat id, slots, enabled, done
 ap_posts_col = db["ap_posts"]         # Autoposter posts: _id=share-link token, chan=chat id, seq, posted
+stats_col = db["daily_stats"]         # _id="YYYY-MM-DD" (IST): views, gates, imp, clk, valued, rev, verified, fallback, blocked
 
 # A user can open at most this many links per day (admins are exempt). One link = 1 count, all its files are sent.
 # Day changes at midnight in this timezone.
@@ -302,6 +303,15 @@ async def delete_link(token: str):
 
 async def inc_views(token: str):
     await links_col.update_one({"_id": token}, {"$inc": {"views": 1}})
+    await stat_inc(views=1)
+
+
+async def stat_inc(**fields):
+    """Add to today's counters (IST day). Analytics must never break the bot, so errors are swallowed."""
+    try:
+        await stats_col.update_one({"_id": _today()}, {"$inc": fields}, upsert=True)
+    except Exception:
+        pass
 
 
 async def list_links(skip: int, limit: int, creator=None):
