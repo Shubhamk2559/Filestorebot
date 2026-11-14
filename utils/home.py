@@ -129,20 +129,13 @@ h1 .a{{display:block;color:#fff;text-shadow:0 0 22px rgba(255,255,255,.35)}}
 h1 .b{{display:block;color:transparent;background:linear-gradient(100deg,#ff2d95 20%,#fff 45%,#ff2d95 55%,#ff1f6e 80%);background-size:250% 100%;
 -webkit-background-clip:text;background-clip:text;animation:shine 3.6s linear infinite;filter:drop-shadow(0 0 14px rgba(255,45,149,.85))}}
 @keyframes shine{{from{{background-position:150% 0}}to{{background-position:-100% 0}}}}
-.tag{{margin:16px 0 4px;padding:7px 28px;background:linear-gradient(135deg,var(--pink),#ff5fb8);color:#1a0212;font-weight:800;
-transform:skew(-8deg);border-radius:6px;box-shadow:0 6px 24px rgba(255,45,149,.55);letter-spacing:.5px}}
-.tag span{{display:inline-block;transform:skew(8deg)}}
 .glass{{margin:16px 0 8px;padding:16px 18px;border-radius:20px;background:rgba(255,45,149,.09);border:1px solid rgba(255,124,207,.35);
 backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);box-shadow:0 0 24px rgba(255,45,149,.2) inset}}
 .glass p{{margin:0;color:var(--muted);line-height:1.6;font-size:1.02rem}}
 .glass p b{{color:#fff;font-style:italic}}
-ul{{list-style:none;padding:0;margin:16px 0 22px;display:flex;gap:10px;flex-wrap:wrap;justify-content:center}}
-li{{padding:8px 15px;border:1.5px solid var(--pink);border-radius:999px;background:rgba(255,45,149,.12);font-weight:700;font-size:.95rem;
-box-shadow:0 0 14px rgba(255,45,149,.4)}}
-li:before{{content:"♥ ";color:var(--pink2)}}
 .btn{{position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:17px 20px;border-radius:18px;
-color:#fff;text-decoration:none;font-weight:800;font-size:1.12rem;letter-spacing:.3px;background:linear-gradient(135deg,#ff2d95,#d4146e 55%,#ff4f8b);
-box-shadow:0 0 0 2px rgba(255,255,255,.18),0 12px 32px rgba(255,45,149,.6),0 0 44px rgba(255,45,149,.5);animation:pulse 2.2s ease-in-out infinite}}
+color:#fff;text-decoration:none;font-weight:800;font-size:1.12rem;letter-spacing:.3px;background:linear-gradient(180deg,#37aee2,#1e96c8);
+box-shadow:0 0 0 2px rgba(255,255,255,.18),0 12px 32px rgba(42,171,238,.55),0 0 44px rgba(42,171,238,.4);animation:pulse 2.2s ease-in-out infinite}}
 .btn:after{{content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.55),transparent);
 transform:skewX(-20deg);animation:sweep 3s ease-in-out infinite}}
 @keyframes sweep{{0%,55%{{left:-60%}}100%{{left:130%}}}}
@@ -157,7 +150,6 @@ font-size:.98rem;background:linear-gradient(160deg,rgba(255,45,149,.2),rgba(122,
 box-shadow:0 0 16px rgba(255,45,149,.35),0 0 14px rgba(255,45,149,.2) inset;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}}
 .ch em{{font-style:normal;font-size:1.25rem;filter:drop-shadow(0 0 6px rgba(255,45,149,.9))}}
 .ch:active{{transform:scale(.97);box-shadow:0 0 24px rgba(255,45,149,.7)}}
-.hint{{margin-top:12px;color:var(--pink2);font-size:.9rem;letter-spacing:.4px}}
 .on{{margin-top:16px;color:var(--pink2);font-family:Pacifico,cursive;font-size:1.2rem;text-shadow:0 0 14px rgba(255,45,149,.8)}}
 .on b{{display:inline-block;width:9px;height:9px;border-radius:50%;background:#3dff8b;margin-right:8px;box-shadow:0 0 10px #3dff8b;animation:blink 1.6s infinite}}
 @keyframes blink{{50%{{opacity:.35}}}}
@@ -169,11 +161,8 @@ small{{display:block;margin-top:22px;color:#b98aa6;font-size:.78rem}}
 <div class="crown">👑</div>
 {img_tag}
 <h1><span class="a">{t1}</span><span class="b">{t2}</span></h1>
-<div class="tag"><span>💋 Telegram Bot</span></div>
 <div class="glass"><p>{text}</p></div>
-<ul><li>Fast</li><li>Secure</li><li>Unlimited</li></ul>
 <a class="btn" href="{link}">{plane}<span>{button}</span></a>
-<div class="hint">🔥 Private &middot; Instant &middot; Just for you</div>
 <h2>Join Our Channels</h2>
 <nav class="chs">{chans}</nav>
 <div class="on"><b></b>Always Online ♡</div>
