@@ -6,7 +6,10 @@ Autoposter screens of the admin panel (registered into handlers.admin's ACTIONS 
       ⏰ Timings        several times a day, posts per time (each time has its own count)
       📚 All Posts      every post of this channel (✅ posted / ⏳ pending), open one -> Post now / Delete
       ➕ Create Post    (a) range: first + last message of a source channel  (b) send / forward files, then Done
-      ▶️ ON / OFF, 🔁 mark all pending, 🗑 remove channel
+      🗂 Queue          shuffled order of the posts (cycle, cursor, up next)
+      🔀 Reshuffle      new random order, all posts pending again
+      🔁 Mode           loop (reshuffle every cycle) / one pass (stop after every post is posted once)
+      ▶️ ON / OFF, 🗑 remove channel
 """
 import html
 import logging
@@ -81,15 +84,20 @@ async def show_channel(update, cid: int, note: str = ""):
         return
     total, posted = await db.ap_counts(cid)
     on = ch.get("enabled", True)
+    loop = ch.get("loop", True)
     text = (f"{note}📺 <b>{html.escape(ch['title'])}</b>\n\n"
             f"Autoposter: {'ON ✅' if on else 'OFF ⏸'}\n"
             f"⏰ Timings (IST): {AP.fmt_slots(ch.get('slots', []))}\n"
+            f"🔀 Order: shuffled · Cycle <b>{(ch.get('queue_state') or {}).get('cycle', 0)}</b> · "
+            f"{'🔁 loop' if loop else '➡️ one pass'}\n"
             f"📚 Posts: <b>{total}</b> · ✅ posted {posted} · ⏳ pending {total - posted}")
     await show(update, text, M([
         [B("⏰ Timings", f"adm:aptm:{cid}"), B(f"📚 All Posts ({total})", f"adm:apall:{cid}:0")],
         [B("➕ Create Post", f"adm:apnew:{cid}"), B("🎨 Caption & Button", f"adm:apcb:{cid}")],
-        [B("⏸ Turn OFF" if on else "▶️ Turn ON", f"adm:apon:{cid}")],
-        [B("🔁 Mark all pending", f"adm:apreset:{cid}"), B("🧹 Wipe posts", f"adm:apwipe:{cid}")],
+        [B("🗂 Queue", f"adm:apq:{cid}"), B("🔀 Reshuffle", f"adm:apresh:{cid}")],
+        [B(f"🔁 Mode: {'loop' if loop else 'one pass'}", f"adm:apmode:{cid}"),
+         B("⏸ Turn OFF" if on else "▶️ Turn ON", f"adm:apon:{cid}")],
+        [B("🧹 Wipe posts", f"adm:apwipe:{cid}")],
         [B("🗑 Remove channel", f"adm:aprm:{cid}")],
         [B("🔙 Back", "adm:ap")],
     ]))
@@ -111,9 +119,67 @@ async def a_apon(update, context, args):
 
 @action("apreset")
 async def a_apreset(update, context, args):
+    await a_apresh(update, context, args)          # old "mark all pending" button = a fresh reshuffle
+
+
+# ===================================================================== shuffled queue
+def _ago(ts) -> str:
+    if not ts:
+        return "never"
+    mins = int((time.time() - ts) // 60)
+    return "just now" if mins < 1 else f"{mins} min ago" if mins < 60 else f"{mins // 60} h ago" if mins < 1440 else f"{mins // 1440} d ago"
+
+
+async def show_queue(update, cid: int, note: str = ""):
+    ch = await db.ap_get_channel(cid)
+    if not ch:
+        await show(update, "⚠️ Channel not found.", K.back("ap"))
+        return
+    total, posted = await db.ap_counts(cid)
+    qs = ch.get("queue_state") or {}
+    queue, cursor = qs.get("queue") or [], int(qs.get("cursor", 0))
+    nxt = AP.next_slot(ch.get("slots", []))
+    batch = int(nxt[1]["n"]) if nxt else 1
+    up = await db.ap_upcoming(cid, 10)
+    lines = [f"{'▶️' if i < batch else '•'} #{p['seq']} {html.escape(p['title'][:30])}" for i, p in enumerate(up)]
+    when = (f"{nxt[0].strftime('%H:%M')} IST ×{nxt[1]['n']}" if nxt else "no timing set")
+    await show(update,
+               f"{note}🗂 <b>Queue</b> — {html.escape(ch['title'])}\n\n"
+               f"⏳ Remaining: <b>{total - posted}</b> · ✅ Posted: <b>{posted}</b>\n"
+               f"🔄 Cycle: <b>{qs.get('cycle', 0)}</b> · Cursor: <b>{cursor}/{len(queue)}</b>\n"
+               f"Mode: <b>{'🔁 loop' if ch.get('loop', True) else '➡️ one pass'}</b>\n"
+               f"Status: <b>{html.escape(str(qs.get('shuffle_status', 'idle')))}</b>\n"
+               f"Last posted: <b>{_ago(qs.get('last_posted_at'))}</b>\n"
+               f"Next time: <b>{when}</b>\n\n"
+               f"<b>Up next</b> (▶️ = goes out at the next time)\n"
+               + ("\n".join(lines) if lines else "<i>empty</i>"),
+               M([[B("🔀 Reshuffle", f"adm:apresh:{cid}"), B("🔄 Refresh", f"adm:apq:{cid}")],
+                  [B("🔙 Back", f"adm:apc:{cid}")]]))
+
+
+@action("apq")
+async def a_apq(update, context, args):
+    await show_queue(update, int(args[0]))
+
+
+@action("apresh")
+async def a_apresh(update, context, args):
     cid = int(args[0])
-    await db.ap_reset(cid)
-    await show_channel(update, cid, "🔁 All posts are pending again.\n\n")
+    await db.ap_rebuild_cycle(cid)
+    await show_queue(update, cid, "🔀 Queue reshuffled.\n\n")
+
+
+@action("apmode")
+async def a_apmode(update, context, args):
+    cid = int(args[0])
+    ch = await db.ap_get_channel(cid)
+    if ch:
+        await db.ap_set(cid, loop=not ch.get("loop", True))
+    ch = await db.ap_get_channel(cid) or {}
+    await show_channel(update, cid,
+                       ("🔁 Loop: when every post is posted, the queue is reshuffled and starts again.\n\n"
+                        if ch.get("loop", True) else
+                        "➡️ One pass: the Autoposter turns OFF after every post is posted once.\n\n"))
 
 
 @action("aprm")
