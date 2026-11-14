@@ -86,6 +86,9 @@ DEFAULTS = {
     "ads_tries": 3,               # no-fill tries before files are given without an ad
     "ads_last_postback": 0,
     "ads_admin_test": False,      # show the ad gate to admins too (for testing)
+    # ---- Backup (utils/backup.py)
+    "auto_backup": True,          # send a backup file to the owner every 24 h
+    "bk_last": 0,                 # time of the last backup
 }
 
 
@@ -107,7 +110,7 @@ class SettingsCache:
         self._data[key] = value
         await settings_col.update_one({"_id": "main"}, {"$set": {key: value}}, upsert=True)
 
-    async def reset(self, keep=("admins", "db_channel", "ads_secret")):
+    async def reset(self, keep=("admins", "db_channel", "ads_secret", "bk_last")):
         """Restore defaults but keep admins and the database channel."""
         kept = {k: self._data.get(k) for k in keep}
         fresh = copy.deepcopy(DEFAULTS)
@@ -259,7 +262,8 @@ async def caption_overrides(ids: list) -> dict:
 
 
 async def restore_file(token: str, idx: int, new_msg_id: int, kind: str, name: str, cap: str, by: int):
-    """Point link <token> slot <idx> at its new message id (file was re-forwarded into a new channel / bot)."""
+    """Point link <token> slot <idx> at its new message id (file was re-forwarded into a new channel / bot).
+    Safe when many files of ONE link arrive at the same time: every file only touches its own array slot."""
     code = make_code(token, idx)
     await files_col.update_one(
         {"code": code},
@@ -267,17 +271,16 @@ async def restore_file(token: str, idx: int, new_msg_id: int, kind: str, name: s
                   "date": time.time()}},
         upsert=True,
     )
-    link = await links_col.find_one({"_id": token}, {"ids": 1})
-    if not link:
-        await links_col.insert_one({"_id": token, "ids": [], "creator": by,
-                                    "label": "Restored link", "created": time.time(), "views": 0})
-        ids = []
-    else:
-        ids = link["ids"]
-    if len(ids) <= idx:
-        ids = ids + [None] * (idx + 1 - len(ids))
-    ids[idx] = new_msg_id
-    await links_col.update_one({"_id": token}, {"$set": {"ids": ids}})
+    try:   # create the link if it does not exist (idempotent)
+        await links_col.update_one(
+            {"_id": token},
+            {"$setOnInsert": {"ids": [], "creator": by, "label": "Restored link",
+                              "created": time.time(), "views": 0}},
+            upsert=True)
+    except DuplicateKeyError:
+        pass   # another file of the same link created it a moment ago
+    # one atomic write per slot; missing slots before it become null (skipped on delivery until restored)
+    await links_col.update_one({"_id": token}, {"$set": {f"ids.{idx}": new_msg_id}})
 
 
 async def create_link(ids: list, creator: int, label: str, token: str = None) -> str:
