@@ -32,6 +32,9 @@ BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 WORKER_URL = os.getenv("WORKER_URL", "").strip().rstrip("/")
 WORKER_SECRET = os.getenv("WORKER_SECRET", "").strip()
 
+# Invisible padding so message bubbles are as wide as their inline buttons (0 = off). See utils/padding.py
+PAD_WIDTH = int(os.getenv("PAD_WIDTH", "34") or 0)
+
 DB_NAME = os.getenv("DB_NAME", "filesharebot")
 PORT = int(os.getenv("PORT", "8080"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

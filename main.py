@@ -20,6 +20,7 @@ import config
 from database import db
 from handlers import admin, start, upload
 from handlers import autoposter as _autoposter  # noqa: F401  (registers the Autoposter panel screens)
+from utils import padding
 from utils.links import register_bot
 from utils.streamer import streamer
 from utils.web import start_web_server
@@ -69,6 +70,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     asyncio.set_event_loop(asyncio.new_event_loop())   # Python 3.12 + uvloop: run_polling needs a current loop
+    padding.install()           # every message with inline buttons gets as wide as its keyboard
     app = (ApplicationBuilder()
            .token(config.BOT_TOKEN)
            .defaults(Defaults(parse_mode=ParseMode.HTML))
