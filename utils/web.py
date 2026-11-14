@@ -21,7 +21,7 @@ from aiohttp import web
 from database import db
 from database.db import settings as S
 from utils import ads
-from utils import usage
+from utils import home, usage
 from utils.streamer import RangeError, parse_range, streamer
 
 log = logging.getLogger(__name__)
@@ -135,7 +135,8 @@ async def start_web_server(port: int, bot=None):
     app = web.Application()
     app["bot"] = bot
     ads.setup_routes(app)   # /ad (Mini App), /api/ad/*, /monetag/postback
-    app.router.add_get("/", root)
+    app.router.add_get("/", home.page)                       # landing page (utils/home.py)
+    app.router.add_get("/assets/home-image", home.image)
     app.router.add_get("/health", health)
     app.router.add_route("GET", "/dl/{token}/{msg_id}", stream_file)
     app.router.add_route("HEAD", "/dl/{token}/{msg_id}", stream_file)
