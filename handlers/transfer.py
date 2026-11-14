@@ -6,7 +6,9 @@ handlers/transfer.py
       🔐 Login           phone + code (+ 2-step password) of YOUR Telegram account, or paste a session string
       🚀 New transfer    pick source (private channel / group / chat) -> destination (channel, chat, Saved
                          Messages) -> everything is copied with captions, no "Forwarded from" tag
-      ⏹ Stop             live progress, can be stopped and resumed later
+      ⏸ Pause / ▶️ Resume / ⏹ Stop / ❌ Cancel, live speed, per-type counts (videos, photos, files, text ...),
+                         "not forwarded" list + retry
+      🗑 Delete          remove everything that was copied into a chat (or wipe a whole chat) in one go
 
 The copy itself runs on Telegram's servers (see utils/transfer.py), so it is fast and uses almost no RAM.
 """
@@ -72,6 +74,7 @@ async def a_tr(update, context, args):
         rows.append([B("🚀 New transfer", "adm:trnew")])
         if job:
             rows.append([B("📊 Current / last job", "adm:trjob")])
+        rows.append([B("🗑 Delete copied files / wipe a chat", "adm:trcl")])
         rows.append([B("🚪 Logout", "adm:trout")])
     else:
         head = "❌ Not logged in"
@@ -203,7 +206,9 @@ async def a_trout(update, context, args):
 @owner_only
 async def a_trouty(update, context, args):
     if T.busy():
-        T.CURRENT.stop = True
+        T.CURRENT.request_stop()
+    if T.clean_busy():
+        T.CLEAN.stop = True
     await T.session.logout()
     await a_tr(update, context, args)
 
@@ -240,6 +245,9 @@ async def _dialogs(context, refresh=False):
 async def a_trnew(update, context, args):
     if T.busy():
         await show(update, "⚠️ A transfer is already running.", M([[B("📊 Open it", "adm:trjob")], [B("🔙 Back", "adm:tr")]]))
+        return
+    if T.clean_busy():
+        await show(update, "⚠️ A delete job is running.", M([[B("📊 Open it", "adm:trclj")], [B("🔙 Back", "adm:tr")]]))
         return
     if not await T.session.ensure():
         await a_tr(update, context, args)
@@ -382,12 +390,15 @@ async def _go(update, context, start_id: int):
     if T.busy():
         await show(update, "⚠️ A transfer is already running.", M([[B("📊 Open it", "adm:trjob")]]))
         return
+    if T.clean_busy():
+        await show(update, "⚠️ A delete job is running.", M([[B("📊 Open it", "adm:trclj")]]))
+        return
     if "tr_src" not in context.user_data or "tr_dst" not in context.user_data:
         await show(update, "⚠️ Session expired, start again.", K.back("tr"))
         return
     (sid, stitle), (did, dtitle) = context.user_data["tr_src"], context.user_data["tr_dst"]
     job = T.start_job(T.Job(src=sid, dst=did, src_title=stitle, dst_title=dtitle, start_id=max(1, start_id)))
-    await _watch(update, context, job)
+    await _watch(update, context, job, _status, _kb)
 
 
 @action("trjob")
@@ -397,33 +408,90 @@ async def a_trjob(update, context, args):
     if not job:
         await show(update, "No transfer yet.", K.back("tr"))
         return
-    await _watch(update, context, job)
+    await _watch(update, context, job, _status, _kb)
+
+
+def _link(src: int, mid: int) -> str:
+    s = str(src)
+    return f"https://t.me/c/{s[4:]}/{mid}" if s.startswith("-100") else ""
 
 
 def _status(job) -> str:
-    icon = {"done": "✅", "stopped": "⏸", "error": "⚠️"}.get(job.state, "🔄")
-    txt = (f"{icon} <b>Transfer</b> - {_esc(job.state)}\n\n"
+    if job.paused:
+        icon, label = "⏸", "paused"
+    else:
+        icon = {"done": "✅", "stopped": "⏹", "cancelled": "❌", "error": "⚠️"}.get(job.state, "🔄")
+        label = {"starting": "starting", "scanning": "reading source", "running": "copying", "done": "done",
+                 "stopped": "stopped (can be resumed)", "cancelled": "cancelled", "error": "error"}.get(job.state, job.state)
+    txt = (f"{icon} <b>{'Retry' if job.only_items is not None else 'Transfer'}</b> - {label}\n\n"
            f"📤 {_esc(job.src_title)}\n📥 {_esc(job.dst_title)}\n\n"
-           f"<code>{_bar(job.percent)}</code> {job.percent:.0f}%\n"
-           f"✅ Copied: <b>{job.copied}</b>   ⚠️ Failed: <b>{job.failed}</b>   ⏭ Skipped: {job.skipped}\n"
-           f"⚡ {job.speed:.1f} msg/s   ⏱ left: {_t(job.eta) if job.running else '-'}")
+           f"<code>{_bar(job.percent)}</code> {job.percent:.0f}%\n")
+
+    if job.phase == "scan" and job.running:
+        txt += f"🔍 Counting what is in the source… <b>{job.total}</b> messages so far\n"
+    rows = []
+    for k, ic, name in T.KINDS:
+        seen = job.seen.get(k, 0)
+        if not seen:
+            continue
+        line = f"{ic} {name}: <b>{job.copied_by.get(k, 0)}</b> / {seen}"
+        if job.failed_by.get(k):
+            line += f"   ⚠️ {job.failed_by[k]} not forwarded"
+        rows.append(line)
+    if rows:
+        txt += "\n<b>Source → transferred</b>\n" + "\n".join(rows) + "\n"
+
+    txt += (f"\n📦 In source: <b>{job.total}</b>\n"
+            f"✅ Transferred: <b>{job.copied}</b>\n"
+            f"🚫 Not forwarded: <b>{job.failed}</b>\n"
+            f"⏳ Left: <b>{job.left}</b>   ⏭ Skipped (deleted/service): {job.skipped}\n")
+    if job.fail_reasons:
+        why = ", ".join(f"{_esc(r)} ×{n}" for r, n in job.fail_reasons.most_common(3))
+        txt += f"❓ Why: {why}\n"
+    if job.running:
+        txt += f"⚡ {job.speed:.1f} msg/s   ⏱ left: {_t(job.eta)}   🎚 {T.SPEEDS[job.speed_key][0]}"
+        if job.flood_left and not job.paused:
+            txt += f"\n⏳ Telegram limit - waiting {job.flood_left}s"
+    else:
+        txt += f"⏱ Took {_t(job.elapsed())}"
+    if job.sent_n:
+        txt += f"\n🗑 {job.sent_n} copied messages are tracked and can be deleted in one tap."
     if job.error:
         txt += f"\n\n⚠️ {_esc(job.error)}"
     if job.state == "done":
-        txt += "\n\nAll done 🎉"
+        txt += "\n\nAll done 🎉" if not job.failed else "\n\nDone - some messages could not be forwarded."
+    if job.state == "stopped":
+        txt += "\n\nProgress is saved. Start a new transfer with the same chats to resume."
     return txt
 
 
-async def _watch(update, context, job):
+def _kb(job):
+    if not job.running:
+        rows = []
+        if job.failed_items:
+            rows.append([B(f"📋 Not forwarded ({job.failed})", "adm:trfail"), B("🔁 Retry failed", "adm:trretry")])
+        if job.sent_n:
+            rows.append([B(f"🗑 Delete the {job.sent_n} copied files", "adm:trdelj")])
+        rows.append([B("🔙 Back", "adm:tr")])
+        return M(rows)
+    main = [B("▶️ Resume", "adm:trresume") if job.paused else B("⏸ Pause", "adm:trpause"),
+            B("⏹ Stop", "adm:trstop")]
+    speed = [B(("✅ " if k == job.speed_key else "") + name, f"adm:trspd:{k}") for k, (name, _d) in T.SPEEDS.items()]
+    rows = [main, [B("❌ Cancel", "adm:trcancel")], speed]
+    if job.failed_items:
+        rows.append([B(f"📋 Not forwarded ({job.failed})", "adm:trfail")])
+    return M(rows)
+
+
+async def _watch(update, context, obj, render, kbf):
     """Edit one message with live numbers until the job ends."""
     q = update.callback_query
     chat_id = update.effective_chat.id
-    kb0 = M([[B("⏹ Stop", "adm:trstop")]]) if job.running else K.back("tr")
     if q:
-        await show(update, _status(job), kb0)
+        await show(update, render(obj), kbf(obj))
         msg = q.message
     else:                                   # started from a typed answer (message ID): send a fresh message
-        msg = await update.effective_chat.send_message(_status(job), reply_markup=kb0)
+        msg = await update.effective_chat.send_message(render(obj), reply_markup=kbf(obj))
     old = _watchers.pop(chat_id, None)
     if old:
         old.cancel()
@@ -432,26 +500,331 @@ async def _watch(update, context, job):
         last = ""
         while True:
             await asyncio.sleep(3)
-            txt = _status(job)
-            kb = M([[B("⏹ Stop", "adm:trstop")]]) if job.running else K.back("tr")
-            if txt != last:
+            txt, kb = render(obj), kbf(obj)
+            sig = txt + "|" + ",".join(b.callback_data for r in kb.inline_keyboard for b in r)
+            if sig != last:
                 try:
                     await msg.edit_text(txt, reply_markup=kb)
-                    last = txt
+                    last = sig
                 except Exception as e:
-                    if "not modified" not in str(e).lower():
+                    if "not modified" in str(e).lower():
+                        last = sig
+                    else:
                         log.debug("progress edit: %s", e)
-            if not job.running:
+            if not obj.running:
                 return
 
     _watchers[chat_id] = asyncio.create_task(loop())
 
 
+async def _refresh(update):
+    if T.CURRENT:
+        await show(update, _status(T.CURRENT), _kb(T.CURRENT))
+
+
+async def _settle(job, secs: float = 4.0):
+    """Wait (briefly) until a stopping job has really ended."""
+    end = asyncio.get_event_loop().time() + secs
+    while job.running and asyncio.get_event_loop().time() < end:
+        await asyncio.sleep(0.4)
+
+
+@action("trpause")
+@owner_only
+async def a_trpause(update, context, args):
+    if T.busy():
+        T.CURRENT.pause()
+    await _refresh(update)
+
+
+@action("trresume")
+@owner_only
+async def a_trresume(update, context, args):
+    if T.busy():
+        T.CURRENT.resume()
+    await _refresh(update)
+
+
 @action("trstop")
 @owner_only
 async def a_trstop(update, context, args):
+    """Stop = end the job but keep the saved resume point."""
     if T.busy():
-        T.CURRENT.stop = True
-    await asyncio.sleep(1.5)
+        T.CURRENT.request_stop()
+        await _settle(T.CURRENT)
+    await _refresh(update)
+
+
+@action("trcancel")
+@owner_only
+async def a_trcancel(update, context, args):
+    if not T.busy():
+        await _refresh(update)
+        return
+    await show(update,
+               "❌ <b>Cancel this transfer?</b>\n\n"
+               "The saved resume point is discarded.\n"
+               "Files that were already copied stay in the destination - you can delete them afterwards in one tap.",
+               M([[B("✅ Yes, cancel", "adm:trcancely")], [B("↩️ No, keep going", "adm:trjob")]]))
+
+
+@action("trcancely")
+@owner_only
+async def a_trcancely(update, context, args):
+    if T.busy():
+        T.CURRENT.request_stop(cancel=True)
+        await _settle(T.CURRENT)
     if T.CURRENT:
-        await show(update, _status(T.CURRENT), K.back("tr"))
+        await _watch(update, context, T.CURRENT, _status, _kb)
+
+
+@action("trspd")
+@owner_only
+async def a_trspd(update, context, args):
+    if T.busy() and args:
+        T.CURRENT.set_speed(args[0])
+    await _refresh(update)
+
+
+@action("trfail")
+@owner_only
+async def a_trfail(update, context, args):
+    job = T.CURRENT
+    if not job or not job.failed:
+        await show(update, "✅ Nothing failed.", K.back("trjob"))
+        return
+    lines = []
+    for mid, kind, why in job.failed_items[:25]:
+        ic = T.KIND_INFO.get(kind, ("📎", ""))[0]
+        url = _link(job.src, mid)
+        ref = f'<a href="{url}">#{mid}</a>' if url else f"#{mid}"
+        lines.append(f"{ic} {ref} - {_esc(why)}")
+    more = job.failed - min(len(job.failed_items), 25)
+    why = ", ".join(f"{_esc(r)} ×{n}" for r, n in job.fail_reasons.most_common(5))
+    rows = [[B("🔁 Retry failed", "adm:trretry")]] if (job.failed_items and not job.running) else []
+    rows.append([B("🔙 Back", "adm:trjob")])
+    await show(update,
+               f"🚫 <b>Not forwarded: {job.failed}</b>\n\n{why}\n\n" + "\n".join(lines)
+               + (f"\n… and {more} more" if more > 0 else ""),
+               M(rows))
+
+
+@action("trretry")
+@owner_only
+async def a_trretry(update, context, args):
+    if T.busy() or T.clean_busy():
+        await show(update, "⚠️ Another job is running.", M([[B("📊 Open it", "adm:trjob")]]))
+        return
+    nj = T.retry_job(T.CURRENT) if T.CURRENT else None
+    if not nj:
+        await show(update, "Nothing to retry.", K.back("tr"))
+        return
+    await _watch(update, context, T.start_job(nj), _status, _kb)
+
+
+# ===================================================================== one-shot delete
+def _cstatus(cj) -> str:
+    icon = {"done": "✅", "stopped": "⏹", "error": "⚠️"}.get(cj.state, "🗑")
+    label = {"starting": "starting", "scanning": "finding messages", "running": "deleting",
+             "done": "done", "stopped": "stopped", "error": "error"}.get(cj.state, cj.state)
+    what = "everything in the chat" if cj.mode == "all" else "files copied by the transfer"
+    txt = (f"{icon} <b>Delete</b> - {label}\n\n📥 {_esc(cj.title)}\n<i>{what}</i>\n\n"
+           f"<code>{_bar(cj.percent)}</code> {cj.percent:.0f}%\n"
+           f"🗑 Deleted: <b>{cj.deleted}</b> / {cj.total}")
+    if cj.missing:
+        txt += f"\n👻 Already gone: {cj.missing}"
+    if cj.failed:
+        txt += f"\n⚠️ Failed: {cj.failed}"
+    if cj.error:
+        txt += f"\n\n⚠️ {_esc(cj.error)}"
+    if cj.state == "done":
+        txt += "\n\nAll deleted 🎉"
+    return txt
+
+
+def _ckb(cj):
+    return M([[B("⏹ Stop", "adm:trclstop")]]) if cj.running else K.back("tr")
+
+
+@action("trclj")
+@owner_only
+async def a_trclj(update, context, args):
+    if not T.CLEAN:
+        await show(update, "No delete job yet.", K.back("tr"))
+        return
+    await _watch(update, context, T.CLEAN, _cstatus, _ckb)
+
+
+@action("trclstop")
+@owner_only
+async def a_trclstop(update, context, args):
+    if T.clean_busy():
+        T.CLEAN.stop = True
+        for _ in range(10):
+            if not T.CLEAN.running:
+                break
+            await asyncio.sleep(0.4)
+    if T.CLEAN:
+        await show(update, _cstatus(T.CLEAN), _ckb(T.CLEAN))
+
+
+@action("trcl")
+@owner_only
+async def a_trcl(update, context, args):
+    if T.busy():
+        await show(update, "⚠️ A transfer is running. Stop or cancel it first.", M([[B("📊 Open it", "adm:trjob")]]))
+        return
+    if T.clean_busy():
+        await a_trclj(update, context, args)
+        return
+    if not await T.session.ensure():
+        await a_tr(update, context, args)
+        return
+    items = await T.tracked()
+    context.user_data["tr_cl"] = items
+    rows = []
+    for i, d in enumerate(items):
+        rows.append([B(f"🗑 {_short(d['dst_title'], 24)} · {d['n']} files", f"adm:trclsel:{i}")])
+    rows.append([B("🧹 Wipe a whole chat…", "adm:trwp")])
+    rows.append([B("🔙 Back", "adm:tr")])
+    await show(update,
+               "🗑 <b>Delete in one go</b>\n\n"
+               + ("Pick a destination to delete <b>everything this bot copied into it</b>:" if items
+                  else "Nothing copied by the bot is tracked yet.\n")
+               + "\n\n🧹 <b>Wipe a whole chat</b> removes ALL messages in a chat (e.g. Saved Messages).",
+               M(rows))
+
+
+def _tracked_item(context, args):
+    items = context.user_data.get("tr_cl") or []
+    try:
+        return items[int(args[0])]
+    except (IndexError, ValueError):
+        return None
+
+
+@action("trclsel")
+@owner_only
+async def a_trclsel(update, context, args):
+    d = _tracked_item(context, args)
+    if not d:
+        await a_trcl(update, context, [])
+        return
+    await show(update,
+               f"🗑 <b>{_esc(d['dst_title'])}</b>\n\n"
+               f"The bot copied <b>{d['n']}</b> messages here (from {_esc(d['src_title'])}).\n"
+               "Delete exactly those - other messages in the chat are not touched.",
+               M([[B(f"✅ Delete the {d['n']} copied files", f"adm:trcly:{args[0]}")],
+                  [B("🧹 Wipe the WHOLE chat instead…", f"adm:trclw:{args[0]}")],
+                  [B("🔙 Back", "adm:trcl")]]))
+
+
+@action("trcly")
+@owner_only
+async def a_trcly(update, context, args):
+    d = _tracked_item(context, args)
+    if not d:
+        await a_trcl(update, context, [])
+        return
+    if T.busy() or T.clean_busy():
+        await show(update, "⚠️ Another job is running.", K.back("tr"))
+        return
+    cj = T.start_clean(T.CleanJob(dst=d["dst"], title=d["dst_title"], mode="tracked", src=d["src"]))
+    await _watch(update, context, cj, _cstatus, _ckb)
+
+
+@action("trdelj")
+@owner_only
+async def a_trdelj(update, context, args):
+    """From the job screen: delete what this job copied."""
+    job = T.CURRENT
+    items = await T.tracked()
+    context.user_data["tr_cl"] = items
+    for i, d in enumerate(items):
+        if job and d["src"] == job.src and d["dst"] == job.dst:
+            await a_trclsel(update, context, [str(i)])
+            return
+    await show(update, "Nothing tracked for this transfer.", K.back("tr"))
+
+
+# ---- wipe a whole chat
+@action("trclw")
+@owner_only
+async def a_trclw(update, context, args):
+    d = _tracked_item(context, args)
+    if not d:
+        await a_trcl(update, context, [])
+        return
+    context.user_data["tr_wp"] = (d["dst"], d["dst_title"])
+    await _wipe_confirm(update, context)
+
+
+@action("trwp")
+@owner_only
+async def a_trwp(update, context, args):
+    page = int(args[0]) if args else 0
+    items = await _dialogs(context, refresh=bool(len(args) > 1))
+    context.user_data["state"] = "tr_wipe_in"
+    rows = [[B("💾 Saved Messages", "adm:trwps:me")]]
+    await show(update,
+               "🧹 <b>Wipe a chat</b>\n\nTap the chat whose messages should ALL be deleted, "
+               "or send its link, @username or ID.",
+               _page(items, page, "trwps", "trwp", rows))
+
+
+@action("trwps")
+@owner_only
+async def a_trwps(update, context, args):
+    if args and args[0] == "me":
+        context.user_data["tr_wp"] = (T.session.me.id, "Saved Messages")
+    else:
+        cid, title, _ = (await _dialogs(context))[int(args[0])]
+        context.user_data["tr_wp"] = (cid, title)
+    await _wipe_confirm(update, context)
+
+
+@state("tr_wipe_in")
+@owner_only
+async def st_wipe_in(update, context):
+    try:
+        chat = await T.resolve_chat(await T.session.ensure(), update.effective_message.text)
+    except Exception as e:
+        await update.effective_chat.send_message(
+            f"⚠️ Cannot open that chat (<code>{_esc(type(e).__name__)}</code>).", reply_markup=K.cancel())
+        return
+    title = "Saved Messages" if chat.id == T.session.me.id else T.chat_title(chat)
+    context.user_data["tr_wp"] = (chat.id, title)
+    await _wipe_confirm(update, context)
+
+
+async def _wipe_confirm(update, context):
+    context.user_data.pop("state", None)
+    cid, title = context.user_data["tr_wp"]
+    client = await T.session.ensure()
+    n = await T.count_chat(client, cid)
+    warn = ""
+    try:
+        chat = await client.get_chat(cid)
+        if T.kind_icon(chat) == "👤" and cid != T.session.me.id:
+            warn = "\n⚠️ This is a private chat - the messages are deleted for the other person too."
+    except Exception:
+        pass
+    await show(update,
+               f"🧹 <b>Wipe: {_esc(title)}</b>\n\n"
+               f"ALL messages in this chat (about <b>{n}</b>) will be deleted. This cannot be undone.{warn}",
+               M([[B("🧹 Yes, delete everything", "adm:trwpy")], [B("❌ No, keep it", "adm:trcl")]]))
+
+
+@action("trwpy")
+@owner_only
+async def a_trwpy(update, context, args):
+    tgt = context.user_data.get("tr_wp")
+    if not tgt:
+        await a_trcl(update, context, [])
+        return
+    if T.busy() or T.clean_busy():
+        await show(update, "⚠️ Another job is running.", K.back("tr"))
+        return
+    cj = T.start_clean(T.CleanJob(dst=tgt[0], title=tgt[1], mode="all"))
+    context.user_data.pop("tr_wp", None)
+    await _watch(update, context, cj, _cstatus, _ckb)
