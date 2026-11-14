@@ -7,6 +7,9 @@ Autoposter engine (no UI here - the panel lives in handlers/autoposter.py).
   group_posts               caption file = thumbnail, captionless files below it = the post's files
   create_posts              copy everything into the Database Channel (with backup codes), make links + post records
   send_post                 publish one post (thumbnail + caption + "Get Files" button) to a channel / group
+  ensure_queue              shuffled queue: every post once per cycle in random order (loop = reshuffle each cycle,
+                            one pass = pause when every post is posted); new posts are mixed into the running cycle
+  next_slot                 next upcoming timing (for the Queue screen)
   autopost_loop             background scheduler (all times in IST)
 """
 import asyncio
@@ -190,6 +193,7 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
     total_files = sum(1 + len(p["files"]) for p in posts if p["files"])
     seq = await db.ap_last_seq(cid)
     made = skipped = copied_files = 0
+    new_tokens = []
     error = ""
     last_edit = 0.0
 
@@ -235,13 +239,16 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
         seq += 1
         await db.ap_add_post(cid, token, thumb_token, seq, title, th["cap_html"], th["kind"], len(ids), by)
         made += 1
+        new_tokens.append(token)
         await progress()
+    await db.ap_enqueue_new(cid, new_tokens)      # mix the new posts into the running shuffled cycle
     await progress(final=True)
 
 
 # ------------------------------------------------------------------ publishing
-async def send_post(bot, chat_id: int, post: dict):
-    """Publish one post to the channel / group. Returns None on success, else an error text."""
+async def send_post(bot, chat_id: int, post: dict, mark: bool = True):
+    """Publish one post to the channel / group. Returns None on success, else an error text.
+    mark=False: the caller (the queue) records the post as posted itself."""
     channel = S.get("db_channel")
     if not channel:
         return "Database Channel is not set"
@@ -257,24 +264,94 @@ async def send_post(bot, chat_id: int, post: dict):
                    parse_mode=ParseMode.HTML, reply_markup=kb)
     except TelegramError as e:
         return str(e)
-    await db.ap_mark_posted(post["_id"])
+    if mark:
+        await db.ap_mark_posted(post["_id"])
     return None
+
+
+_locks: dict = {}
+
+
+def _lock(cid: int) -> asyncio.Lock:
+    return _locks.setdefault(cid, asyncio.Lock())
+
+
+async def ensure_queue(cid: int, ch: dict):
+    """Makes sure a cycle is running. Loop mode: a finished cycle is reshuffled with ALL posts.
+    One pass: only the posts that are not posted yet are queued."""
+    qs = ch.get("queue_state") or {}
+    queue = qs.get("queue") or []
+    if queue and int(qs.get("cursor", 0)) < len(queue):
+        return ch
+    loop = ch.get("loop", True)
+    if loop and int(qs.get("cycle", 0)) > 0:
+        return await db.ap_rebuild_cycle(cid)
+    ch = await db.ap_rebuild_cycle(cid, only_unused=True)       # first start: keeps what was already posted
+    if ch and loop and not (ch.get("queue_state") or {}).get("queue") and (await db.ap_counts(cid))[0]:
+        return await db.ap_rebuild_cycle(cid)                   # everything was posted already -> new shuffled cycle
+    return ch
+
+
+def next_slot(slots: list):
+    """(datetime, slot) of the next upcoming timing in IST, or None."""
+    now = dt.datetime.now(IST)
+    best = None
+    for sl in slots or []:
+        h, m = map(int, sl["t"].split(":"))
+        t = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if t <= now:
+            t += dt.timedelta(days=1)
+        if best is None or t < best[0]:
+            best = (t, sl)
+    return best
 
 
 async def run_slot(bot, ch: dict, n: int):
     cid = ch["_id"]
-    for p in await db.ap_pending(cid, n):
-        err = await send_post(bot, cid, p)
-        if err:
-            await notify_owner(bot, f"ap_err_{cid}",
-                               f"⚠️ Autoposter: cannot post in <b>{html.escape(ch['title'])}</b>:\n"
-                               f"<code>{html.escape(err)}</code>", every=1800)
+    async with _lock(cid):
+        ch = await db.ap_get_channel(cid)
+        if not ch or not ch.get("enabled", True):
             return
-        await asyncio.sleep(POST_DELAY)
-    if await db.ap_pending_count(cid) == 0:
-        await notify_owner(bot, f"ap_done_{cid}",
-                           f"📭 Autoposter: all posts of <b>{html.escape(ch['title'])}</b> are posted. "
-                           "Create more posts to continue.", every=86400)
+        loop = ch.get("loop", True)
+        ch = await ensure_queue(cid, ch)
+        if not ch:
+            return
+        sent = 0
+        while sent < n:
+            ch = await db.ap_get_channel(cid)
+            if not ch or not ch.get("enabled", True):
+                return
+            qs = ch.get("queue_state") or {}
+            queue, cursor = qs.get("queue") or [], int(qs.get("cursor", 0))
+            if cursor >= len(queue):
+                break                                   # cycle finished: the next time reshuffles (loop)
+            post = await db.ap_get_post(queue[cursor])
+            if not post or post.get("chan") != cid or post.get("posted"):
+                await db.ap_skip_cursor(cid)            # deleted, or already posted (e.g. with Post now)
+                continue
+            err = await send_post(bot, cid, post, mark=False)
+            if err:
+                await notify_owner(bot, f"ap_err_{cid}",
+                                   f"⚠️ Autoposter: cannot post in <b>{html.escape(ch['title'])}</b>:\n"
+                                   f"<code>{html.escape(err)}</code>", every=1800)
+                if err.startswith("thumbnail not found"):
+                    await db.ap_skip_cursor(cid)        # this post can never be sent -> do not block the queue
+                    continue
+                break
+            await db.ap_advance(cid, post["_id"])
+            sent += 1
+            await asyncio.sleep(POST_DELAY)
+
+        ch = await db.ap_get_channel(cid) or {}
+        qs = ch.get("queue_state") or {}
+        queue, cursor = qs.get("queue") or [], int(qs.get("cursor", 0))
+        finished = cursor >= len(queue)
+        await db.ap_finalize(cid, sent, finished and bool(queue))
+        if finished and not loop and (await db.ap_counts(cid))[0]:
+            await db.ap_set(cid, enabled=False)
+            await notify_owner(bot, f"ap_done_{cid}",
+                               f"⏸ Autoposter: every post of <b>{html.escape(ch.get('title', ''))}</b> is posted "
+                               "(one pass). Create more posts and turn it ON, or reshuffle to start over.", every=60)
 
 
 async def autopost_loop(bot):
