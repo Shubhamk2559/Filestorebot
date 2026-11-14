@@ -67,3 +67,11 @@ Put your own reverse proxy (nginx/Caddy, `proxy_buffering off`) in front of port
 - Non-admin uploads/messages are ignored. Admins skip force-sub.
 - If the bot loses admin rights in a channel, users are not blocked and the owner gets a warning message.
 - Hidden-forward users/channels can't be read from forwards: send the numeric ID instead.
+
+## 🔄 Transfer controls (Panel → Transfer)
+- **⏸ Pause / ▶️ Resume** – freeze the running transfer and continue exactly where it stopped.
+- **⏹ Stop** – ends the job, progress is saved (start the same source → destination again to resume).
+- **❌ Cancel** – ends the job and throws the saved progress away.
+- **🐢 / ⚖️ / ⚡ Speed** – change the pause between requests live.
+- **Live counts** – videos, photos, files, audio, text … found in the source vs. transferred, plus *Not forwarded* (with reason, message links and **🔁 Retry failed**).
+- **🗑 Delete copied files** – removes exactly the messages the bot copied into a destination in one go (ids are stored in MongoDB, so it also works after a restart). **🧹 Wipe a whole chat** deletes *everything* in a chat (e.g. Saved Messages) after a confirmation.
