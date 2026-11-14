@@ -21,6 +21,7 @@ from aiohttp import web
 from database import db
 from database.db import settings as S
 from utils import ads
+from utils import usage
 from utils.streamer import RangeError, parse_range, streamer
 
 log = logging.getLogger(__name__)
@@ -89,9 +90,11 @@ async def stream_file(request: web.Request) -> web.StreamResponse:
         return resp
 
     gen = streamer.iter_range(info, start, end)
+    usage.stream_open()                 # VPS usage tracking: one more viewer right now
     try:
         async for chunk in gen:
             await resp.write(chunk)
+            usage.stream_bytes_add(len(chunk))
         await resp.write_eof()
     except (ConnectionResetError, ConnectionError):
         pass  # viewer closed the tab / seeked elsewhere: totally normal
@@ -100,6 +103,7 @@ async def stream_file(request: web.Request) -> web.StreamResponse:
     except Exception:
         log.exception("Streaming %s/%s failed", token, msg_id)
     finally:
+        usage.stream_close()
         await gen.aclose()  # cancels the parallel downloads immediately
     return resp
 
