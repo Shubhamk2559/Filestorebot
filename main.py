@@ -20,6 +20,8 @@ import config
 from database import db
 from handlers import admin, start, upload
 from handlers import autoposter as _autoposter  # noqa: F401  (registers the Autoposter panel screens)
+from handlers import backup as _backup          # registers the Backup / Restore screens
+from utils.backup import backup_loop
 from utils import padding
 from utils.links import register_bot
 from utils.streamer import streamer
@@ -38,6 +40,7 @@ async def post_init(app):
     await streamer.start()                               # MTProto engine (needs API_ID, API_HASH, BASE_URL)
     app.bot_data["gc"] = asyncio.create_task(autodelete_loop(app.bot))
     app.bot_data["ap"] = asyncio.create_task(autopost_loop(app.bot))     # Autoposter scheduler
+    app.bot_data["bk"] = asyncio.create_task(backup_loop(app.bot))      # daily auto-backup to the owner
     app.bot_data["reg"] = asyncio.create_task(register_bot(app.bot.username))   # links -> this bot (Cloudflare Worker)
     log.info("Bot @%s started (web on :%s, streaming %s)", app.bot.username, config.PORT,
              "ON" if streamer.ready else f"OFF ({streamer.error})")
@@ -47,7 +50,7 @@ async def post_init(app):
 
 async def post_shutdown(app):
     await streamer.stop()
-    for key in ("gc", "ap"):
+    for key in ("gc", "ap", "bk"):
         task = app.bot_data.get(key)
         if task:
             task.cancel()
@@ -93,6 +96,8 @@ def main():
     app.add_handler(CommandHandler("start", start.start_cmd, filters=private))        # the ONLY command
     app.add_handler(CallbackQueryHandler(admin.callback_router, pattern=r"^adm:"))
     app.add_handler(CallbackQueryHandler(start.check_callback, pattern=r"^chk:"))
+    # a backup file (fsb-backup-*.json.gz) sent by the owner -> restore flow (must come BEFORE the generic router)
+    app.add_handler(MessageHandler(private & filters.Document.ALL & _backup.BackupDocFilter(), _backup.ingest))
     app.add_handler(MessageHandler(private & ~filters.COMMAND, admin.message_router))
     # Files forwarded into the Database Channel are re-linked from their caption code (disaster recovery)
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST & ~filters.COMMAND, upload.channel_restore))
