@@ -21,6 +21,7 @@ from database import db
 from handlers import admin, start, upload
 from handlers import autoposter as _autoposter  # noqa: F401  (registers the Autoposter panel screens)
 from handlers import backup as _backup          # registers the Backup / Restore screens
+from handlers import analytics as _analytics    # registers the Earnings / Analytics screens
 from utils.backup import backup_loop
 from utils import padding
 from utils.links import register_bot
