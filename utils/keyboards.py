@@ -34,4 +34,6 @@ def main_panel(owner: bool):
     if owner:
         last.insert(0, B("👮 Admins", callback_data="adm:admins"))
     rows.append(last)
+    if owner:
+        rows.append([B("💾 Backup / Restore", callback_data="adm:bk")])
     return M(rows)
