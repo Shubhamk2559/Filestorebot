@@ -13,7 +13,7 @@ except Exception:                      # not installed / not supported -> normal
 
 from telegram.constants import ParseMode
 from telegram.error import Conflict, NetworkError
-from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandler,
+from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler,
                           ContextTypes, Defaults, MessageHandler, filters)
 
 import config
@@ -26,6 +26,7 @@ from handlers import transfer as _transfer      # registers the Transfer screens
 from handlers import usage as _usage            # registers the VPS Usage / Plan advice screens
 from utils.backup import backup_loop
 from utils import padding
+from utils import chats as _chats
 from utils.links import register_bot
 from utils.streamer import streamer
 from utils.web import start_web_server
@@ -108,10 +109,13 @@ def main():
     app.add_handler(MessageHandler(private & ~filters.COMMAND, admin.message_router))
     # Files forwarded into the Database Channel are re-linked from their caption code (disaster recovery)
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST & ~filters.COMMAND, upload.channel_restore))
+    # remember where the bot is admin -> shown as inline buttons in the panel (utils/chats.py)
+    app.add_handler(ChatMemberHandler(_chats.on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, _chats.on_channel_post), group=1)
     app.add_error_handler(on_error)
 
     # only the update types this bot really uses (less traffic, less CPU)
-    app.run_polling(allowed_updates=["message", "callback_query", "channel_post"],
+    app.run_polling(allowed_updates=["message", "callback_query", "channel_post", "my_chat_member"],
                     drop_pending_updates=True, timeout=30)
 
 
