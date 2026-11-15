@@ -205,11 +205,18 @@ async def a_trout(update, context, args):
 @action("trouty")
 @owner_only
 async def a_trouty(update, context, args):
-    if T.busy():
-        T.CURRENT.request_stop()
-    if T.clean_busy():
-        T.CLEAN.stop = True
-    await T.session.logout()
+    try:
+        if T.busy():
+            T.CURRENT.request_stop()
+        cb = getattr(T, "clean_busy", None)      # older utils/transfer.py has no wipe/delete jobs
+        if cb and cb():
+            T.CLEAN.stop = True
+    except Exception:
+        log.exception("could not stop running job before logout")
+    try:
+        await T.session.logout()
+    except Exception:
+        log.exception("logout failed")
     await a_tr(update, context, args)
 
 
