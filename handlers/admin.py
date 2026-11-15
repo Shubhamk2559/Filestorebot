@@ -64,6 +64,18 @@ PAGE = 8
 MAX_RANGE = 10000
 TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst", "tr_cl", "tr_wp", "pick_state", "pick_kind", "picked_chat")
 
+_KB_CLEANED = set()        # admins whose old bottom keyboard was already removed since the bot started
+
+
+async def _kb_cleanup(update):
+    """The old 'Choose a Channel / Cancel' reply keyboard sticks in Telegram until a bot removes it: do that once."""
+    uid = update.effective_user.id if update.effective_user else None
+    if uid is None or uid in _KB_CLEANED or not update.effective_message:
+        return
+    _KB_CLEANED.add(uid)
+    await clear_picker(update.effective_message)
+
+
 ACTIONS = {}
 STATES = {}
 SELF_ANSWER = {"batchdone"}
@@ -179,6 +191,7 @@ def panel_text() -> str:
 
 async def send_panel(update, context):
     """Used by /start for admins."""
+    await clear_picker(update.effective_message)      # also removes any leftover bottom keyboard
     await update.effective_message.reply_text(
         panel_text(),
         reply_markup=K.main_panel(is_owner(update.effective_user.id)),
@@ -263,6 +276,7 @@ async def make_invite_link(bot, chat):
 @admin_only
 async def callback_router(update, context):
     q = update.callback_query
+    await _kb_cleanup(update)
     parts = q.data.split(":")[1:]
 
     name, args = parts[0], parts[1:]
@@ -294,6 +308,15 @@ async def message_router(update, context):
     user, msg = update.effective_user, update.effective_message
 
     if not user or not msg or not is_admin(user.id):
+        return
+
+    await _kb_cleanup(update)
+    # the old reply-keyboard ("Choose a Channel / Cancel") may still be stuck on the screen: remove it
+    if (msg.text or "").strip() == CANCEL_TEXT and context.user_data.get("state") != "batch":
+        for k in TEMP_KEYS:
+            context.user_data.pop(k, None)
+        await clear_picker(msg)
+        await send_panel(update, context)
         return
 
     st = context.user_data.get("state")
