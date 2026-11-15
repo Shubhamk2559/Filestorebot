@@ -202,6 +202,8 @@ async def _advice(update):
         await show(update, _need_data(), _kb("p"))
         return
     pick, cur, u = r["pick"], r["current"], r["util"]
+    cs, term = U.currency(), U.best_term()
+    vat_txt = f", incl. {U.vat_pct():g}% VAT" if U.vat_pct() else ", excl. VAT"
     if r["days"] >= 14:
         conf = "🟢 Good data"
     elif r["days"] >= 3:
@@ -224,14 +226,20 @@ async def _advice(update):
                      "Consider splitting the load (e.g. move streaming to a second server).")
     else:
         lines.append(f"✅ <b>Recommended: {pick['name']}</b> - {pick['cores']} vCPU · {pick['ram_gb']} GB RAM · "
-                     f"{pick['disk_gb']} GB · {pick['port']} Mbit/s · ≈ €{pick['eur']:.2f}/month")
+                     f"{pick['disk_gb']} GB · {pick['port']} Mbit/s")
+        lines.append(f"💰 <b>{cs}{U.price(pick):.2f}/month</b> on the {term}-month term"
+                     f"{vat_txt} (cheapest way to buy this plan)")
+        if term != 1:
+            lines.append(f"<i>1-month term: {cs}{U.price(pick, 1):.2f}/month "
+                         f"(+ small one-time setup fee at checkout).</i>")
         lines.append(f"It would run at about CPU {u['cpu']:.0f}% · RAM {u['ram']:.0f}% · Disk {u['disk']:.0f}% · "
                      f"Port {u['port']:.0f}% at your busiest moments.")
     if cur:
         if cur["eur"] > pick["eur"] and not r["undersized"]:
-            lines.append(f"\n💸 Your VPS looks like <b>{cur['name']}</b> (≈ €{cur['eur']:.2f}). "
-                         f"Switching to {pick['name']} saves ≈ <b>€{cur['eur'] - pick['eur']:.2f}/month</b> "
-                         f"(€{(cur['eur'] - pick['eur']) * 12:.0f}/year).")
+            diff = U.price(cur) - U.price(pick)
+            lines.append(f"\n💸 Your VPS looks like <b>{cur['name']}</b> ({cs}{U.price(cur):.2f}/month). "
+                         f"Switching to {pick['name']} saves ≈ <b>{cs}{diff:.2f}/month</b> "
+                         f"({cs}{diff * 12:.0f}/year).")
         elif cur["name"] == pick["name"]:
             lines.append(f"\n👍 Your VPS already looks like <b>{cur['name']}</b> - the right size.")
         else:
@@ -239,8 +247,18 @@ async def _advice(update):
     else:
         lines.append(f"\nℹ️ Detected {r['cores']} vCPU / {r['ram_total_mb'] / 1024:.1f} GB RAM (not a plain Cloud VPS size). "
                      "Plus / VDS plans cost more for the same cores and RAM.")
+    if r["alts"] and not r["undersized"]:
+        base = U.price(pick) / (1 + U.vat_pct() / 100)          # Contabo, ex-VAT, so the comparison is fair
+        lines.append(f"\n🏷 <b>Other providers that also fit</b> <i>(approx, excl. VAT; Contabo = {cs}{base:.2f})</i>")
+        for a in r["alts"][:4]:
+            tag = " ⚠️" if a.get("risky") else ""
+            lines.append(f"• {a['provider']} {a['name']} - {a['cores']} vCPU · {a['ram_gb']:g} GB · "
+                         f"{a['disk_gb']} GB · <b>{cs}{a['usd']:.2f}</b>{tag}\n  <i>{a.get('note', '')}</i>")
+        cheaper = [a for a in r["alts"] if not a.get("risky") and a["usd"] < base]
+        if not cheaper:
+            lines.append("✅ No reliable provider is cheaper than Contabo for this size right now.")
     if r["out_tb_month"] > U.FAIR_USE_TB * 0.8:
         lines.append(f"\n⚠️ Traffic is close to the {U.FAIR_USE_TB} TB fair-use limit.")
-    lines.append("\n<i>Prices are approximate (EUR, 1-month term) - confirm on contabo.com/en/pricing. "
-                 "Edit the list in utils/usage.py or set CONTABO_PLANS_JSON in .env.</i>")
+    lines.append(f"\n<i>Prices = Contabo checkout style ({term}-month term{vat_txt}). Change with CONTABO_TERM (1/12/24), "
+                 "CONTABO_VAT, CONTABO_CURRENCY or CONTABO_PLANS_JSON in .env - confirm on contabo.com/en/vps.</i>")
     await show(update, "\n".join(lines), _kb("p"))
