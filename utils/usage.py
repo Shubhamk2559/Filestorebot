@@ -40,17 +40,50 @@ PORT_HEADROOM = 1.30
 FAIR_USE_TB = 32           # Contabo "unlimited" traffic is fair-use ~32 TB/month outgoing (EU plans)
 
 # --------------------------------------------------------------------------- Contabo plan catalog
-# Approximate monthly prices in EUR. Contabo changes names/prices from time to time:
-# check https://contabo.com/en/pricing/ and either edit this list or set CONTABO_PLANS_JSON in .env, e.g.
-#   CONTABO_PLANS_JSON=[{"name":"Cloud VPS 4","cores":4,"ram_gb":8,"disk_gb":100,"port":200,"eur":4.5}, ...]
+# "eur" = the 1-month-term price WITHOUT VAT (this is the number Contabo's checkout multiplies by VAT).
+# Longer terms are cheaper: 12 months = -15 %, 24 months = -20 % (the cheapest way to buy the same spec).
+# Verified against the live checkout: Cloud VPS 4 = 6.60 ex-VAT -> 7.79 with 18 % VAT (1 month),
+# 5.28 ex-VAT -> 6.23 with VAT (24 months). Cloud VPS 6 = 9.00 -> 10.62 / 7.20 -> 8.50.
+# Contabo changes prices from time to time: edit this list or set CONTABO_PLANS_JSON in .env, e.g.
+#   CONTABO_PLANS_JSON=[{"name":"Cloud VPS 4","cores":4,"ram_gb":8,"disk_gb":100,"port":200,"eur":6.60}, ...]
 DEFAULT_PLANS = [
-    {"name": "Cloud VPS 4",  "cores": 4,  "ram_gb": 8,  "disk_gb": 100, "port": 200,  "eur": 4.50},
-    {"name": "Cloud VPS 6",  "cores": 6,  "ram_gb": 12, "disk_gb": 200, "port": 300,  "eur": 7.50},
-    {"name": "Cloud VPS 8",  "cores": 8,  "ram_gb": 24, "disk_gb": 300, "port": 600,  "eur": 14.00},
-    {"name": "Cloud VPS 12", "cores": 12, "ram_gb": 48, "disk_gb": 400, "port": 800,  "eur": 25.00},
-    {"name": "Cloud VPS 16", "cores": 16, "ram_gb": 64, "disk_gb": 500, "port": 1000, "eur": 37.00},
-    {"name": "Cloud VPS 18", "cores": 18, "ram_gb": 96, "disk_gb": 600, "port": 1000, "eur": 49.00},
+    {"name": "Cloud VPS 4",  "cores": 4,  "ram_gb": 8,  "disk_gb": 100, "port": 200,  "eur": 6.60},
+    {"name": "Cloud VPS 6",  "cores": 6,  "ram_gb": 12, "disk_gb": 200, "port": 300,  "eur": 9.00},
+    {"name": "Cloud VPS 8",  "cores": 8,  "ram_gb": 24, "disk_gb": 300, "port": 600,  "eur": 16.80},
+    {"name": "Cloud VPS 12", "cores": 12, "ram_gb": 48, "disk_gb": 400, "port": 800,  "eur": 30.00},
+    {"name": "Cloud VPS 16", "cores": 16, "ram_gb": 64, "disk_gb": 500, "port": 1000, "eur": 44.40},
+    {"name": "Cloud VPS 18", "cores": 18, "ram_gb": 96, "disk_gb": 600, "port": 1000, "eur": 58.80},
 ]
+
+TERM_DISCOUNT = {1: 1.00, 12: 0.85, 24: 0.80}
+
+
+def _num_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+def vat_pct() -> float:
+    """VAT shown at checkout (India = 18). Set CONTABO_VAT=0 to show prices without VAT."""
+    return _num_env("CONTABO_VAT", 18)
+
+
+def best_term() -> int:
+    """Term used for the price in the advice. Default 24 months = cheapest. CONTABO_TERM=1|12|24."""
+    t = int(_num_env("CONTABO_TERM", 24))
+    return t if t in TERM_DISCOUNT else 24
+
+
+def currency() -> str:
+    return os.getenv("CONTABO_CURRENCY", "$").strip() or "$"
+
+
+def price(p: dict, term: int = None) -> float:
+    """Monthly price of plan p on the given term, VAT included (same number the checkout shows)."""
+    term = term or best_term()
+    return round(round(p["eur"] * TERM_DISCOUNT[term], 2) * (1 + vat_pct() / 100), 2)
 
 
 def plans() -> list:
@@ -64,6 +97,36 @@ def plans() -> list:
         except Exception:
             log.warning("CONTABO_PLANS_JSON is not valid JSON - using the built-in plan list")
     return sorted(DEFAULT_PLANS, key=lambda p: p["eur"])
+
+
+# --------------------------------------------------------------------------- other providers (comparison only)
+# Approximate monthly prices in USD WITHOUT VAT, checked Nov 2026. These move often (Hetzner raised prices
+# in 2026 and its cheap CX line is often sold out) - verify on the provider's site before buying.
+# Override the whole list with OTHER_PLANS_JSON in .env (same keys, "usd" instead of "eur").
+OTHER_PLANS = [
+    {"provider": "Hetzner",   "name": "CX23 (2 vCPU / 4 GB)", "cores": 2, "ram_gb": 4,  "disk_gb": 40,  "port": 1000,
+     "usd": 6.72,  "note": "best CPU speed + reliability; cheap line is often sold out"},
+    {"provider": "Hetzner",   "name": "CX33 (4 vCPU / 8 GB)", "cores": 4, "ram_gb": 8,  "disk_gb": 80,  "port": 1000,
+     "usd": 10.08, "note": "best CPU speed + reliability; cheap line is often sold out"},
+    {"provider": "Hostinger", "name": "KVM 2 (2 vCPU / 8 GB)", "cores": 2, "ram_gb": 8, "disk_gb": 100, "port": 1000,
+     "usd": 8.79,  "note": "NVMe disk; price is for a 24-month prepay, renews at ~$14.99"},
+    {"provider": "Oracle Cloud", "name": "Always Free ARM (4 OCPU / 24 GB)", "cores": 4, "ram_gb": 24, "disk_gb": 200,
+     "port": 480, "usd": 0.0, "risky": True,
+     "note": "free, but Oracle can reclaim idle instances and signup is strict - not for a money-making bot"},
+]
+
+
+def other_plans() -> list:
+    raw = os.getenv("OTHER_PLANS_JSON", "").strip()
+    if raw:
+        try:
+            lst = json.loads(raw)
+            lst = [x for x in lst if all(k in x for k in ("provider", "name", "cores", "ram_gb", "disk_gb", "port", "usd"))]
+            if lst:
+                return lst
+        except Exception:
+            log.warning("OTHER_PLANS_JSON is not valid JSON - using the built-in list")
+    return list(OTHER_PLANS)
 
 
 # --------------------------------------------------------------------------- live counters (written by web.py)
@@ -384,6 +447,10 @@ def recommend(docs: list) -> dict:
     undersized = pick is None
     if undersized:
         pick = plans()[-1]
+    alts = sorted((a for a in other_plans()
+                   if a["cores"] >= need_cores and a["ram_gb"] >= need_ram_gb and a["disk_gb"] >= need_disk_gb
+                   and a["port"] >= need_port),
+                  key=lambda a: (a.get("risky", False), a["usd"]))
     cur = detect_current(cores, ram_total)
 
     # how full the recommended plan would be
@@ -396,4 +463,4 @@ def recommend(docs: list) -> dict:
             "streams_peak": streams_peak, "disk_now": disk_now, "growth_30d": growth_30d,
             "out_tb_month": out_tb_month, "need_cores": need_cores, "need_ram_gb": need_ram_gb,
             "need_disk_gb": need_disk_gb, "need_port": need_port, "pick": pick, "undersized": undersized,
-            "current": cur, "util": util}
+            "current": cur, "util": util, "alts": alts}
