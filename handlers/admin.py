@@ -39,11 +39,11 @@ from utils.helpers import (
     extract_chat_ref,
     extract_user_id,
     extract_post_id,
-    picker_keyboard,
     clear_picker,
     CANCEL_TEXT,
 )
 from utils import ads
+from utils import chats as CH
 from utils.links import share_link
 from utils.streamer import streamer
 
@@ -62,7 +62,7 @@ def B(text, callback_data):
 NOPREVIEW = LinkPreviewOptions(is_disabled=True)
 PAGE = 8
 MAX_RANGE = 10000
-TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst", "tr_cl", "tr_wp")
+TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst", "tr_cl", "tr_wp", "pick_state", "pick_kind", "picked_chat")
 
 ACTIONS = {}
 STATES = {}
@@ -121,17 +121,44 @@ async def ask(update, context, state_name, text):
 
 
 async def ask_chat(update, context, state_name, text, channel=True, group=False):
-    """Prompt + Telegram's native 'Choose a Channel' picker (no IDs to type)."""
-    await ask(update, context, state_name, text)
+    """Prompt with the bot's known channels / groups as inline buttons right in the chat."""
+    context.user_data["state"] = state_name
+    context.user_data["pick_state"] = state_name
+    context.user_data["pick_kind"] = (channel, group)
+    try:                      # remove a reply-keyboard picker left over from an older version
+        await clear_picker(update.effective_message)
+    except Exception:
+        pass
+    items = await CH.listing(channel, group)
+    rows = []
+    for d in items:
+        icon = "📢" if d.get("type") == "channel" else "👥"
+        t = (d.get("title") or str(d["_id"]))[:40]
+        rows.append([B(f"{icon} {t}", f"adm:pickch:{d['_id']}")])
+    rows.append([B("❌ Cancel", "adm:cancel")])
+    if items:
+        hint = "\n\n👇 <b>Tap a channel below to select it.</b>"
+    else:
+        hint = "\n\n📭 <b>No channel saved yet.</b>"
+    hint += ("\n<i>Not in the list? Add this bot as admin in your channel and it shows up here by itself - "
+             "or forward any post of the channel / send its @username / ID here.</i>")
+    await show(update, text + hint, M(rows))
+
+
+@action("pickch")
+async def a_pickch(update, context, args):
+    st = context.user_data.get("pick_state")
+    if st not in STATES or not args:
+        await show(update, "⚠️ Session expired, start again.", K.back())
+        return
     try:
-        await update.effective_chat.send_message("👇 Tap the button below to choose.",
-                                                 reply_markup=picker_keyboard(channel, group))
-    except Exception as e:  # never fail silently: show the reason, typed input still works
-        log.exception("Chat picker failed")
-        await update.effective_chat.send_message(
-            f"⚠️ Picker button could not be shown: <code>{html.escape(type(e).__name__ + ': ' + str(e))}</code>\n\n"
-            "You can still forward a message from the channel, or send its @username / ID.",
-            reply_markup=K.cancel())
+        cid = int(args[0])
+    except ValueError:
+        await show(update, "⚠️ Invalid channel.", K.back())
+        return
+    context.user_data["state"] = st
+    context.user_data["picked_chat"] = cid
+    await STATES[st](update, context)
 
 
 def panel_text() -> str:
@@ -173,20 +200,21 @@ async def bot_admin_status(bot, chat_id, need_post=False):
 
 
 async def resolve_channel(update, context, need_post: bool):
-    """Resolve a channel from a forwarded message, ID, or username."""
+    """Resolve a channel from an inline pick, a forwarded message, ID, or username."""
     msg = update.effective_message
+    picked = context.user_data.pop("picked_chat", None)
 
-    if msg.text and msg.text.strip() == CANCEL_TEXT:
+    if picked is None and msg.text and msg.text.strip() == CANCEL_TEXT:
         context.user_data.pop("state", None)
         await clear_picker(msg)
         await send_panel(update, context)
         return None
 
-    ref = extract_chat_ref(msg)
+    ref = picked if picked is not None else extract_chat_ref(msg)
 
     if ref is None:
         await msg.reply_text(
-            "⚠️ Please tap the <b>Choose</b> button below.",
+            "⚠️ Tap a channel in the list above, or forward a post of the channel / send its @username or ID.",
             reply_markup=K.cancel(),
         )
         return None
@@ -210,6 +238,7 @@ async def resolve_channel(update, context, need_post: bool):
         await msg.reply_text(why, reply_markup=K.cancel())
         return None
 
+    await CH.remember(chat)
     return chat
 
 
