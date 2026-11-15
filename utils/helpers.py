@@ -10,8 +10,7 @@ import re
 import time
 from functools import wraps
 
-from telegram import (ChatAdministratorRights, KeyboardButton, KeyboardButtonRequestChat,
-                      ReplyKeyboardMarkup, ReplyKeyboardRemove)
+from telegram import ReplyKeyboardRemove
 from telegram.error import RetryAfter, TelegramError
 
 import config
@@ -104,37 +103,6 @@ def render_caption(template: str, user) -> str:
 
 # ------------------------------------------------------------ parsing admin input
 CANCEL_TEXT = "❌ Cancel"
-_PICK_CHANNEL, _PICK_GROUP = 101, 102
-
-
-def picker_keyboard(channel: bool = True, group: bool = False):
-    """
-    Reply keyboard with Telegram's native "Choose a Channel / Choose a Group" picker. The user taps a chat
-    from their own list (or creates a new one) - no IDs. If the bot is not yet admin there, Telegram offers
-    to add it with these rights. The pick arrives as a `chat_shared` service message.
-    """
-    ch_rights = ChatAdministratorRights(
-        is_anonymous=False, can_manage_chat=True, can_delete_messages=False, can_manage_video_chats=False,
-        can_restrict_members=False, can_promote_members=False, can_change_info=False,
-        can_post_stories=False, can_edit_stories=False, can_delete_stories=False,
-        can_invite_users=True, can_post_messages=True)
-    gr_rights = ChatAdministratorRights(
-        is_anonymous=False, can_manage_chat=True, can_delete_messages=False, can_manage_video_chats=False,
-        can_restrict_members=False, can_promote_members=False, can_change_info=False,
-        can_post_stories=False, can_edit_stories=False, can_delete_stories=False, can_invite_users=True)
-    rows = []
-    if channel:
-        rows.append([KeyboardButton("📢 Choose a Channel", request_chat=KeyboardButtonRequestChat(
-            _PICK_CHANNEL, chat_is_channel=True,
-            user_administrator_rights=ch_rights, bot_administrator_rights=ch_rights))])
-    if group:
-        rows.append([KeyboardButton("👥 Choose a Group", request_chat=KeyboardButtonRequestChat(
-            _PICK_GROUP, chat_is_channel=False,
-            user_administrator_rights=gr_rights, bot_administrator_rights=gr_rights))])
-    rows.append([KeyboardButton(CANCEL_TEXT)])
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
-
-
 async def clear_picker(msg):
     """Remove the picker keyboard (a message can only carry one markup, so send + delete a tiny one)."""
     try:
