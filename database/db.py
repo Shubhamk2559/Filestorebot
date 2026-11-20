@@ -287,12 +287,14 @@ async def restore_file(token: str, idx: int, new_msg_id: int, kind: str, name: s
     await links_col.update_one({"_id": token}, {"$set": {f"ids.{idx}": new_msg_id}})
 
 
-async def create_link(ids: list, creator: int, label: str, token: str = None) -> str:
+async def create_link(ids: list, creator: int, label: str, token: str = None, no_ads: bool = False) -> str:
+    """no_ads=True: a free preview link - opened without the ad gate and without using the daily limit."""
     token = token or new_token()
-    await links_col.insert_one(
-        {"_id": token, "ids": ids, "creator": creator, "label": label,
-         "created": time.time(), "views": 0}
-    )
+    doc = {"_id": token, "ids": ids, "creator": creator, "label": label,
+           "created": time.time(), "views": 0}
+    if no_ads:
+        doc["no_ads"] = True
+    await links_col.insert_one(doc)
     return token
 
 
@@ -462,14 +464,21 @@ async def ap_last_seq(cid: int) -> int:
     return int((doc or {}).get("seq", 0))
 
 
-async def ap_add_post(cid: int, token: str, thumb_token: str, seq: int, title: str, cap: str,
-                      kind: str, n_files: int, by: int):
-    """token = the share-link token of the files; thumb_token = backup code token of the thumbnail copy in the DB channel."""
+async def ap_add_post(cid: int, token: str, thumb_token, seq: int, title: str, cap: str,
+                      kind: str, n_files: int, by: int, **extra):
+    """token = the share-link token of the files; thumb_token = backup code token of the thumbnail copy in the DB channel.
+    Image + Video posts (ptype="pair"): token = the free IMAGE link, extra vtoken = the ad-gated VIDEO link,
+    thumb_token = None (the post shows the channel's fixed thumbnail, or the image itself)."""
     await ap_posts_col.insert_one({
         "_id": token, "chan": cid, "seq": seq, "thumb_token": thumb_token, "title": title,
         "cap": cap, "kind": kind, "n_files": n_files, "by": by,
-        "posted": False, "posted_at": None, "created": time.time(),
+        "posted": False, "posted_at": None, "created": time.time(), **extra,
     })
+
+
+def post_tokens(post: dict) -> list:
+    """Every share-link token that belongs to an Autoposter post (1 for classic, 2 for Image + Video)."""
+    return [post["_id"]] + ([post["vtoken"]] if post.get("vtoken") else [])
 
 
 async def ap_get_post(token: str):
@@ -505,11 +514,12 @@ async def ap_delete_post(token: str):
 async def ap_wipe(cid: int, only_posted: bool = False, links: bool = False) -> int:
     """Delete every post of a channel (optionally only the posted ones, optionally their share links too)."""
     q = {"chan": cid, **({"posted": True} if only_posted else {})}
-    tokens = [d["_id"] for d in await ap_posts_col.find(q, {"_id": 1}).to_list(None)]
+    docs = await ap_posts_col.find(q, {"_id": 1, "vtoken": 1}).to_list(None)
+    tokens = [d["_id"] for d in docs]
     if tokens:
         await ap_posts_col.delete_many({"_id": {"$in": tokens}})
         if links:
-            await links_col.delete_many({"_id": {"$in": tokens}})
+            await links_col.delete_many({"_id": {"$in": tokens + [d["vtoken"] for d in docs if d.get("vtoken")]}})
         await ap_channels_col.update_one({"_id": cid}, {"$set": {"queue_state": _blank_queue()}})
     return len(tokens)
 
