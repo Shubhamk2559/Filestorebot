@@ -1,5 +1,7 @@
 """utils/keyboards.py - reusable inline keyboards. Callback data: "adm:<action>:<arg>..."."""
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
+from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, WebAppInfo
+
+import config
 
 
 def cancel():
@@ -19,7 +21,10 @@ def after_link():
 
 
 def main_panel(owner: bool):
-    rows = [
+    rows = []
+    if config.BASE_URL.startswith("https://"):          # web Admin Panel (Mini App) - utils/admin_web.py
+        rows.append([B("🌐 Open Web Panel", web_app=WebAppInfo(url=f"{config.BASE_URL}/admin"))])
+    rows += [
         [B("📦 Create Batch", callback_data="adm:batch"), B("🔗 My Links", callback_data="adm:links")],
         [B("📡 Database Channel", callback_data="adm:dbch"), B("🔔 Force-Sub", callback_data="adm:fsub")],
         [B("🖼 Start Image", callback_data="adm:simg"), B("📝 Start Caption", callback_data="adm:scap")],
