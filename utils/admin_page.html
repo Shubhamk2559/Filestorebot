@@ -109,6 +109,21 @@ code.cp{display:block;padding:10px 12px;border-radius:14px;font:12px/1.4 ui-mono
 .sheet~.toast{z-index:40}.dim{opacity:.55;pointer-events:none}
 .empty{padding:26px 8px;text-align:center;color:var(--t2)}
 .badge.off{color:var(--rose);background:rgba(196,21,63,.12);box-shadow:inset 0 0 0 1px rgba(196,21,63,.3)}.badge.off i{background:var(--rose)}
+
+/* ---- performance: smooth scrolling on phones ---- */
+.glass,.hero,.reset,.sec{-webkit-backdrop-filter:none!important;backdrop-filter:none!important;background:var(--glass)}
+@supports (background:color-mix(in srgb,red 50%,blue)){.glass,.hero,.reset,.sec{background:color-mix(in srgb,var(--bg) 78%,transparent)}}
+.dock,.top.stuck{-webkit-backdrop-filter:blur(12px) saturate(1.4)!important;backdrop-filter:blur(12px) saturate(1.4)!important}
+.dock{background:var(--glass)!important}
+.glass::before{display:none}
+.js body::before{scale:1!important;translate:none!important;transform:translateZ(0)}
+.js .sc .tile,.js .sc .row{transform:none!important;transition:none!important}
+.js .sc{translate:0 24px;scale:1;transition:translate .5s var(--ease),opacity .4s;opacity:0}
+.js .sc.in{translate:0 0;opacity:1}
+.tile{transition:none;box-shadow:inset 0 0 0 1px var(--hair)}
+.sheet{background:var(--bg)!important}
+.app,.sheet{-webkit-overflow-scrolling:touch}
+@media (prefers-reduced-motion:reduce){.js .sc{opacity:1;translate:none}}
 </style></head><body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3 3 8l9 5 9-5-9-5ZM3 13l9 5 9-5"/></symbol><symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol><symbol id="i-db" viewBox="0 0 24 24"><path d="M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3ZM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol><symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4l2-2ZM10 21h4"/></symbol><symbol id="i-pill" viewBox="0 0 24 24"><path d="M7 8h10a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8Z"/></symbol><symbol id="i-ban" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM6 6l12 12"/></symbol><symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z"/></symbol><symbol id="i-image" viewBox="0 0 24 24"><path d="M4 5h16v14H4ZM4 16l5-5 4 4 3-3 4 4M9 9h.01"/></symbol><symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></symbol><symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 12V4h8l10 10-8 8L3 12ZM7.5 8.5h.01"/></symbol><symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5Z"/></symbol><symbol id="i-mega" viewBox="0 0 24 24"><path d="M3 11v3l12 5V6L3 11ZM7 15l1 5h3M18 9a4 4 0 0 1 0 6"/></symbol><symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7"/></symbol><symbol id="i-tv" viewBox="0 0 24 24"><path d="M3 5h18v12H3ZM8 21h8"/></symbol><symbol id="i-cal" viewBox="0 0 24 24"><path d="M3 6h18v15H3ZM3 11h18M8 3v4M16 3v4"/></symbol><symbol id="i-trend" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></symbol><symbol id="i-save" viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5ZM8 4v5h7V4M8 20v-6h8v6"/></symbol><symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h14l-3-3M20 16H6l3 3"/></symbol><symbol id="i-cpu" viewBox="0 0 24 24"><path d="M4 4h16v7H4ZM4 13h16v7H4ZM8 7.5h.01M8 16.5h.01"/></symbol><symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4Z"/></symbol><symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4"/></symbol><symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 3-6.2M4 4v5h5"/></symbol><symbol id="i-sun" viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5"/></symbol><symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z"/></symbol><symbol id="i-auto" viewBox="0 0 24 24"><path d="M4 5h16v11H4ZM9 20h6M12 16v4"/></symbol><symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol></svg>
 <main class="app" id="app">
@@ -402,7 +417,7 @@ function set(t,v){h.setAttribute('data-theme',t);w.style.setProperty('--p',['lig
 var s='auto';try{s=localStorage.getItem(K)||'auto'}catch(e){}set(s);
 b.forEach(function(x){x.addEventListener('click',function(){var t=x.dataset.t;if(document.startViewTransition){document.startViewTransition(function(){set(t,1)})}else set(t,1)})})})();
 var tp=document.querySelector('.top'),tk=false;
-addEventListener('scroll',function(){if(!tk){tk=true;requestAnimationFrame(function(){var y=scrollY;document.documentElement.style.setProperty('--sy',y);tp.classList.toggle('stuck',y>28);tk=false})}},{passive:true});
+var stuck=false;addEventListener('scroll',function(){if(!tk){tk=true;requestAnimationFrame(function(){var s=scrollY>28;if(s!==stuck){stuck=s;tp.classList.toggle('stuck',s)}tk=false})}},{passive:true});
 loadHome();
 document.addEventListener('visibilitychange',function(){if(!document.hidden&&!cur)loadHome()});
 })();
