@@ -174,6 +174,7 @@ async def _limit_reached(bot, chat_id: int):
 
 async def request_access(bot, chat_id: int, link: dict):
     """Entry point for a user who passed force-subscribe: cooldown -> daily limit -> Monetag ad gate -> files."""
+    free = bool(link.get("no_ads"))              # Image + Video post: the image link is a free preview (no ad, no limit)
     if not is_admin(chat_id):
         wait = COOLDOWN_SECONDS - (time.monotonic() - _last_open.get(chat_id, 0.0))
         if wait > 0:
@@ -184,10 +185,10 @@ async def request_access(bot, chat_id: int, link: dict):
         _last_open[chat_id] = time.monotonic()
         if len(_last_open) > 20000:                              # keep memory bounded
             _last_open.clear()
-        if S.get("ads_enabled") and await db.used_today(chat_id) >= db.limit_value():
+        if not free and S.get("ads_enabled") and await db.used_today(chat_id) >= db.limit_value():
             await _limit_reached(bot, chat_id)                  # don't make them watch an ad for nothing
             return
-    if await ads.gate(bot, chat_id, link):                      # Mini App button sent; files follow after the ad
+    if not free and await ads.gate(bot, chat_id, link):         # Mini App button sent; files follow after the ad
         return
     await deliver(bot, chat_id, link)
 
@@ -198,7 +199,7 @@ async def deliver(bot, chat_id: int, link: dict):
     if not ids:
         await _unavailable(bot, chat_id)
         return
-    if is_admin(chat_id):
+    if is_admin(chat_id) or link.get("no_ads"):      # admins and free preview links: no daily-limit count
         await _deliver(bot, chat_id, {**link, "ids": ids})
         return
 
@@ -227,7 +228,7 @@ async def _deliver(bot, chat_id: int, link: dict) -> int:
     if not channel:
         await call(bot.send_message, chat_id, "⚠️ The bot is not set up yet. Please try again later.")
         return 0
-    if S.get("delivery_mode") == "stream":
+    if S.get("delivery_mode") == "stream" and not link.get("no_ads"):     # a free preview image is always sent as the photo
         if streamer.ready:
             n = await deliver_stream(bot, chat_id, link, channel)
             if n is not False:

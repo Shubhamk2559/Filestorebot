@@ -16,8 +16,7 @@ log = logging.getLogger(__name__)
 BATCH = 25
 
 
-async def run_broadcast(bot, from_chat: int, msg_id: int, status_chat: int, status_msg: int, live: dict = None):
-    """live = optional dict that is kept up to date (used by the web panel's progress bar)."""
+async def run_broadcast(bot, from_chat: int, msg_id: int, status_chat: int, status_msg: int):
     total = await db.count_broadcastable()
     counts = {"sent": 0, "blocked": 0, "failed": 0}
     done = 0
@@ -53,8 +52,6 @@ async def run_broadcast(bot, from_chat: int, msg_id: int, status_chat: int, stat
 
     async def progress(final=False):
         nonlocal last_edit
-        if live is not None:
-            live.update(total=total, done=done, finished=final, **counts)
         if not final and time.time() - last_edit < 3:
             return
         last_edit = time.time()
@@ -70,8 +67,6 @@ async def run_broadcast(bot, from_chat: int, msg_id: int, status_chat: int, stat
         except TelegramError:
             pass
 
-    if live is not None:
-        live.update(total=total, done=0, finished=False, **counts)
     batch = []
     async for uid in db.iter_broadcast_ids():
         batch.append(uid)

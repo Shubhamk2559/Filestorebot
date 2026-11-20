@@ -6,6 +6,7 @@ Autoposter screens of the admin panel (registered into handlers.admin's ACTIONS 
       ⏰ Timings        several times a day, posts per time (each time has its own count)
       📚 All Posts      every post of this channel (✅ posted / ⏳ pending), open one -> Post now / Delete
       ➕ Create Post    (a) range: first + last message of a source channel  (b) send / forward files, then Done
+      🔄 Post Type      Classic (caption file = thumbnail + files below) / Image + Video (image 1, video 1, image 2 ...)
       🗂 Queue          shuffled order of the posts (cycle, cursor, up next)
       🔀 Reshuffle      new random order, all posts pending again
       🔁 Mode           loop (reshuffle every cycle) / one pass (stop after every post is posted once)
@@ -77,6 +78,10 @@ async def st_ap_add(update, context):
 
 
 # ===================================================================== one channel
+def _type_name(ch: dict) -> str:
+    return "🖼+🎬 Image + Video" if ch.get("ptype") == "pair" else "🎞 Classic (thumbnail + files)"
+
+
 async def show_channel(update, cid: int, note: str = ""):
     ch = await db.ap_get_channel(cid)
     if not ch:
@@ -88,12 +93,14 @@ async def show_channel(update, cid: int, note: str = ""):
     text = (f"{note}📺 <b>{html.escape(ch['title'])}</b>\n\n"
             f"Autoposter: {'ON ✅' if on else 'OFF ⏸'}\n"
             f"⏰ Timings (IST): {AP.fmt_slots(ch.get('slots', []))}\n"
+            f"🧩 Post type: <b>{_type_name(ch)}</b>\n"
             f"🔀 Order: shuffled · Cycle <b>{(ch.get('queue_state') or {}).get('cycle', 0)}</b> · "
             f"{'🔁 loop' if loop else '➡️ one pass'}\n"
             f"📚 Posts: <b>{total}</b> · ✅ posted {posted} · ⏳ pending {total - posted}")
     await show(update, text, M([
         [B("⏰ Timings", f"adm:aptm:{cid}"), B(f"📚 All Posts ({total})", f"adm:apall:{cid}:0")],
         [B("➕ Create Post", f"adm:apnew:{cid}"), B("🎨 Caption & Button", f"adm:apcb:{cid}")],
+        [B(f"🔄 Post Type: {'🖼+🎬 Image + Video' if ch.get('ptype') == 'pair' else '🎞 Classic'}", f"adm:aptype:{cid}")],
         [B("🗂 Queue", f"adm:apq:{cid}"), B("🔀 Reshuffle", f"adm:apresh:{cid}")],
         [B(f"🔁 Mode: {'loop' if loop else 'one pass'}", f"adm:apmode:{cid}"),
          B("⏸ Turn OFF" if on else "▶️ Turn ON", f"adm:apon:{cid}")],
@@ -115,6 +122,22 @@ async def a_apon(update, context, args):
     if ch:
         await db.ap_set(cid, enabled=not ch.get("enabled", True))
     await show_channel(update, cid, "✅ Updated.\n\n")
+
+
+@action("aptype")
+async def a_aptype(update, context, args):
+    cid = int(args[0])
+    ch = await db.ap_get_channel(cid)
+    if ch:
+        await db.ap_set(cid, ptype="classic" if ch.get("ptype") == "pair" else "pair")
+    ch = await db.ap_get_channel(cid) or {}
+    await show_channel(update, cid,
+                       ("🖼+🎬 <b>Image + Video</b>: new posts are made from image 1, video 1, image 2, video 2 …\n"
+                        "Image link = free preview (no ad) · Video link = ad gate.\n"
+                        "Posts you already created keep their own type.\n\n"
+                        if ch.get("ptype") == "pair" else
+                        "🎞 <b>Classic</b>: captioned file = thumbnail, captionless files below it = the post's files.\n"
+                        "Posts you already created keep their own type.\n\n"))
 
 
 @action("apreset")
@@ -209,8 +232,13 @@ async def show_cb(update, cid: int, note: str = ""):
                f"{note}🎨 <b>Caption &amp; Button</b> — {html.escape(ch['title'])}\n\n"
                f"📝 Fixed caption:\n{tpl or '— not set (each post uses its own caption) —'}\n\n"
                f"🔘 Button: <b>{html.escape(btn)}</b>\n\n"
+               f"🖼+🎬 <b>Image + Video posts</b>\n"
+               f"🖼 Fixed thumbnail: <b>{'set ✅' if ch.get('fthumb') else 'not set (the post uses its own image)'}</b>\n"
+               f"🔘 Buttons: <b>{html.escape(ch.get('btn_img') or AP.DEFAULT_BTN_IMG)}</b> · "
+               f"<b>{html.escape(ch.get('btn_vid') or AP.DEFAULT_BTN_VID)}</b>\n\n"
                "This one fixed caption is used on every post of this channel (also the ones already created).",
                M([[B("📝 Edit Caption", f"adm:apcap:{cid}"), B("🔘 Edit Button", f"adm:apbtn:{cid}")],
+                  [B("🖼 Fixed Thumbnail", f"adm:apthumb:{cid}"), B("🔘 Pair Buttons", f"adm:appbtn:{cid}")],
                   [B("♻️ Reset to default", f"adm:apcbr:{cid}")],
                   [B("🔙 Back", f"adm:apc:{cid}")]]))
 
@@ -223,7 +251,7 @@ async def a_apcb(update, context, args):
 @action("apcbr")
 async def a_apcbr(update, context, args):
     cid = int(args[0])
-    await db.ap_set(cid, cap_tpl="", btn="")
+    await db.ap_set(cid, cap_tpl="", btn="", btn_img="", btn_vid="", fthumb="")
     await show_cb(update, cid, "♻️ Reset.\n\n")
 
 
@@ -272,6 +300,79 @@ async def st_ap_btn(update, context):
     await db.ap_set(cid, btn="" if txt == "-" else txt)
     context.user_data.pop("state", None)
     await msg.reply_text("✅ Button saved.", reply_markup=K.back(f"apcb:{cid}"))
+
+
+@action("apthumb")
+async def a_apthumb(update, context, args):
+    cid = int(args[0])
+    if not S.get("db_channel"):
+        await show(update, "⚠️ Set the Database Channel first.", M([[B("📡 Set Database Channel", "adm:dbch")]]))
+        return
+    context.user_data["ap_cid"] = cid
+    await ask(update, context, "ap_thumb",
+              "🖼 <b>Fixed thumbnail</b> (Image + Video posts)\n\nSend ONE photo. Every Image + Video post of this channel "
+              "is posted with this picture (the buttons open the preview / video links).\n"
+              "It is saved in the Database Channel with a backup code.\n"
+              "Send <code>-</code> to remove it (then each post uses its own image).")
+
+
+@state("ap_thumb")
+async def st_ap_thumb(update, context):
+    msg = update.effective_message
+    cid = context.user_data.get("ap_cid")
+    if cid is None:
+        return
+    if msg.text and msg.text.strip() == "-":
+        await db.ap_set(cid, fthumb="")
+        context.user_data.pop("state", None)
+        await msg.reply_text("✅ Fixed thumbnail removed.", reply_markup=K.back(f"apcb:{cid}"))
+        return
+    kind, name = media_info(msg)
+    channel = S.get("db_channel")
+    if kind != "photo" or not channel:
+        await msg.reply_text("⚠️ Send one photo.", reply_markup=K.cancel())
+        return
+    it = AP.item_from_ptb(msg, kind, name)
+    it["cap"], it["cap_html"] = "", ""                 # only the backup code is written under it
+    token = db.new_token()
+    try:
+        await AP._store(context.bot, channel["id"], it, db.make_code(token, 0), update.effective_user.id)
+    except Exception as e:
+        await msg.reply_text(f"⚠️ Could not save it: <code>{html.escape(str(e))}</code>", reply_markup=K.cancel())
+        return
+    await db.ap_set(cid, fthumb=token)
+    context.user_data.pop("state", None)
+    await msg.reply_text("✅ Fixed thumbnail saved.", reply_markup=K.back(f"apcb:{cid}"))
+
+
+@action("appbtn")
+async def a_appbtn(update, context, args):
+    context.user_data["ap_cid"] = int(args[0])
+    await ask(update, context, "ap_pbtn",
+              "🔘 <b>Image + Video buttons</b>\n\nSend two lines:\n"
+              f"line 1 = image (preview) button, line 2 = video button (max {AP.BTN_MAX} characters each)\n\n"
+              "<code>🖼 Preview</code>\n<code>🎬 Watch Video</code>\n\n"
+              "Send <code>-</code> for the defaults.")
+
+
+@state("ap_pbtn")
+async def st_ap_pbtn(update, context):
+    msg = update.effective_message
+    cid = context.user_data.get("ap_cid")
+    lines = [x.strip() for x in (msg.text or "").splitlines() if x.strip()]
+    if cid is None or not lines:
+        await msg.reply_text("⚠️ Send two lines (or <code>-</code>).", reply_markup=K.cancel())
+        return
+    if lines == ["-"]:
+        img, vid = "", ""
+    elif len(lines) == 2 and all(len(x) <= AP.BTN_MAX for x in lines):
+        img, vid = lines
+    else:
+        await msg.reply_text(f"⚠️ Two lines, up to {AP.BTN_MAX} characters each.", reply_markup=K.cancel())
+        return
+    await db.ap_set(cid, btn_img=img, btn_vid=vid)
+    context.user_data.pop("state", None)
+    await msg.reply_text("✅ Buttons saved.", reply_markup=K.back(f"apcb:{cid}"))
 
 
 # ===================================================================== timings
@@ -362,7 +463,8 @@ async def a_apall(update, context, args):
     cid, page = int(args[0]), (int(args[1]) if len(args) > 1 else 0)
     total, posted = await db.ap_counts(cid)
     posts = await db.ap_list_posts(cid, page * PAGE, PAGE)
-    rows = [[B(f"{'✅' if p['posted'] else '⏳'} #{p['seq']} {p['title'][:24]} · {p['n_files']}", f"adm:app:{p['_id']}")]
+    rows = [[B(f"{'✅' if p['posted'] else '⏳'} #{p['seq']} {p['title'][:24]} · {'🖼+🎬' if p.get('ptype') == 'pair' else p['n_files']}",
+               f"adm:app:{p['_id']}")]
             for p in posts]
     nav = []
     if page > 0:
@@ -383,10 +485,15 @@ async def show_post(update, bot, token: str, note: str = ""):
     if not p:
         await show(update, "⚠️ Post not found.", K.back("ap"))
         return
+    if p.get("ptype") == "pair":
+        links = (f"🖼 Preview (free): <code>{share_link(bot.username, token)}</code>\n"
+                 f"🎬 Video (ad): <code>{share_link(bot.username, p['vtoken'])}</code>")
+    else:
+        links = f"🔗 <code>{share_link(bot.username, token)}</code>"
     await show(update,
-               f"{note}📝 <b>#{p['seq']}</b> · {'✅ posted' if p['posted'] else '⏳ pending'}\n"
-               f"📁 Files: {p['n_files']}\n\n{html.escape(p['title'])}\n\n"
-               f"🔗 <code>{share_link(bot.username, token)}</code>",
+               f"{note}📝 <b>#{p['seq']}</b> · {'✅ posted' if p['posted'] else '⏳ pending'}"
+               f"{' · 🖼+🎬 Image + Video' if p.get('ptype') == 'pair' else ''}\n"
+               f"📁 Files: {p['n_files']}\n\n{html.escape(p['title'])}\n\n{links}",
                M([[B("📤 Post now", f"adm:appnow:{token}")],
                   [B("🗑 Delete post", f"adm:apdel:{token}:0"), B("🗑 Delete post + link", f"adm:apdel:{token}:1")],
                   [B("🔙 Back", f"adm:apall:{p['chan']}:0")]]))
@@ -413,7 +520,8 @@ async def a_apdel(update, context, args):
     with_link = len(args) > 1 and args[1] == "1"
     await db.ap_delete_post(args[0])
     if with_link:
-        await db.delete_link(args[0])
+        for t in (db.post_tokens(p) if p else [args[0]]):
+            await db.delete_link(t)
     await show(update,
                "🗑 Post and its share link deleted." if with_link
                else "🗑 Post deleted from the Autoposter (its share link still works).",
@@ -448,11 +556,19 @@ async def a_apnew(update, context, args):
     if not S.get("db_channel"):
         await show(update, "⚠️ Set the Database Channel first.", M([[B("📡 Set Database Channel", "adm:dbch")]]))
         return
-    await show(update,
-               "➕ <b>Create Post</b>\n\n"
+    ch = await db.ap_get_channel(cid) or {}
+    if ch.get("ptype") == "pair":
+        how = ("🖼+🎬 <b>Image + Video</b> type\n\n"
+               "Order: image 1, video 1, image 2, video 2 … Each (image + video) = one post with two links:\n"
+               "🖼 image = free preview (no ad) · 🎬 video = opens only after the ad.\n"
+               "The post is shown with the channel's fixed thumbnail (🎨 Caption & Button) or, if none is set, its own image.\n")
+    else:
+        how = ("🎞 <b>Classic</b> type\n\n"
                "A file <b>with a caption</b> = the post's thumbnail. All files <b>without a caption</b> right below it "
                "are that post's files (one share link). The next captioned file starts the next post.\n"
-               "📷 A captionless <b>album</b> below a captioned file goes into that post's link.\n\nChoose how:",
+               "📷 A captionless <b>album</b> below a captioned file goes into that post's link.\n")
+    await show(update,
+               f"➕ <b>Create Post</b>\n\n{how}\nChoose how:",
                M([[B("🔢 Range: first + last message", f"adm:aprange:{cid}")],
                   [B("📥 Send / forward files, then Done", f"adm:apcollect:{cid}")],
                   [B("🔙 Back", f"adm:apc:{cid}")]]))
@@ -550,7 +666,8 @@ async def _run_range(bot, src, first: int, last: int, cid: int, by: int, status)
 # ---- (b) collect mode: the admin sends / forwards the files to the bot
 def _collect_text(n: int) -> str:
     return (f"📥 <b>Collecting files</b>\n\n{n} file(s) received.\n"
-            "Send / forward them <b>in order</b> (caption file first, its captionless files below), then tap <b>Done</b>.")
+            "Send / forward them <b>in order</b> (classic: caption file first, its captionless files below · "
+            "Image + Video: image 1, video 1, image 2, video 2 …), then tap <b>Done</b>.")
 
 
 def _collect_kb():
