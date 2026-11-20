@@ -7,6 +7,7 @@ utils/admin_web.py - the web Admin Panel (Telegram Mini App).
 Security: every call carries Telegram initData that is HMAC-verified with the bot token, and the user must be an
 admin (OWNER_ID or a panel admin). Owner-only operations (Backup, Transfer, VPS, Earnings) need OWNER_ID.
 
+Access section : Force-sub, Join buttons, Ban / Unban, Admins (owner only) - fully inside the panel
 Growth section : Broadcast, Stats, Ads, Autoposter
 Owner section  : Earnings, Backup, Transfer, VPS usage
 Every other tile opens the matching screen in the bot chat (op "open") - those screens need typed input.
@@ -15,6 +16,7 @@ import asyncio
 import datetime as dt
 import html
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -40,7 +42,7 @@ OPEN_ACTIONS = {
     "scap": "📝 Start Caption", "fcap": "🏷 File Caption", "mode": "🎬 Delivery Mode", "reset": "♻️ Reset Settings",
     "tr": "🔄 Transfer", "bk": "💾 Backup / Restore", "ap": "📅 Autoposter", "bc": "📢 Broadcast",
 }
-OWNER_OPS = {"earnings", "backup", "backup_now", "backup_auto", "transfer", "vps"}
+OWNER_OPS = {"earnings", "backup", "backup_now", "backup_auto", "transfer", "vps", "admins"}
 
 
 class Err(Exception):
@@ -339,6 +341,233 @@ async def op_vps(uid, b, bot):
         except Exception:
             log.exception("VPS advice failed")
     return out
+
+
+# ======================================================================== ACCESS section
+# Force-sub, Join buttons, Ban / Unban and Admins - fully usable inside the panel (no typing in the chat).
+_NAMES: dict = {}                      # user id -> (name, username), best effort cache for display only
+_URL_RE = re.compile(r"^(https?://|tg://)\S+$")
+
+
+async def _names(bot, ids):
+    """Look up display names for user ids (only works for users who have talked to the bot). Never raises."""
+    if len(_NAMES) > 2000:
+        _NAMES.clear()
+
+    async def one(i):
+        try:
+            c = await asyncio.wait_for(bot.get_chat(i), 4)
+            name = " ".join(x for x in (c.first_name, c.last_name) if x) or (c.title or "")
+            _NAMES[i] = (name, c.username or "")
+        except Exception:
+            _NAMES[i] = ("", "")
+    todo = [i for i in ids if i not in _NAMES]
+    if todo:
+        await asyncio.gather(*(one(i) for i in todo))
+
+
+def _user_id(value) -> int:
+    t = str(value if value is not None else "").strip()
+    if not re.fullmatch(r"\d{5,15}", t):
+        raise Err("Send the numeric Telegram user ID (5-15 digits).")
+    return int(t)
+
+
+def _chat_ref(value):
+    """Channel reference typed in the panel: numeric ID, @username or t.me/username link."""
+    t = str(value or "").strip()
+    if re.fullmatch(r"-?\d+", t):
+        return int(t)
+    m = re.fullmatch(r"(?:https?://)?(?:t\.me/|telegram\.me/)?@?([A-Za-z][A-Za-z0-9_]{3,})/?", t)
+    if m:
+        return "@" + m.group(1)
+    if "t.me/+" in t or "joinchat" in t:
+        raise Err("Private invite links can't be resolved. Use the channel's numeric ID (-100…) instead.")
+    raise Err("Send the channel @username, its t.me link or its numeric ID.")
+
+
+# ---- access: force-sub
+async def _fsub_view():
+    from utils import chats as CH
+    chans = S.get("fsub_channels")
+    have = {c["id"] for c in chans}
+    known = [{"id": d["_id"], "title": d.get("title") or str(d["_id"]), "username": d.get("username") or "",
+              "type": d.get("type") or ""}
+             for d in await CH.listing(channel=True, group=True, limit=30) if d["_id"] not in have]
+    return {"on": bool(S.get("fsub_enabled")),
+            "channels": [{"id": c["id"], "title": c.get("title") or str(c["id"]), "link": c.get("link") or ""}
+                         for c in chans],
+            "known": known}
+
+
+async def op_fsub(uid, b, bot):
+    a = b.get("set")
+    if a == "toggle":
+        await S.set("fsub_enabled", not S.get("fsub_enabled"))
+    elif a in ("up", "down", "rm"):
+        try:
+            cid = int(b.get("cid"))
+        except (TypeError, ValueError):
+            raise Err("bad channel")
+        chans = list(S.get("fsub_channels"))
+        idx = next((i for i, c in enumerate(chans) if c["id"] == cid), None)
+        if idx is None:
+            raise Err("Channel is not in the list (maybe already removed).")
+        if a == "rm":
+            chans.pop(idx)
+        else:
+            new = idx + (-1 if a == "up" else 1)
+            if 0 <= new < len(chans):
+                chans[idx], chans[new] = chans[new], chans[idx]
+        await S.set("fsub_channels", chans)
+    elif a == "add":
+        from handlers import admin as AD
+        from utils import chats as CH
+        ref = _chat_ref(b.get("value"))
+        try:
+            chat = await bot.get_chat(ref)
+            ok, why = await AD.bot_admin_status(bot, chat.id, False)
+        except TelegramError as e:
+            raise Err(f"Can't access that chat ({e}). Add the bot as an admin there and try again.")
+        if not ok:
+            raise Err(why)
+        if chat.type not in ("channel", "group", "supergroup"):
+            raise Err("That is not a channel or group.")
+        chans = list(S.get("fsub_channels"))
+        if any(c["id"] == chat.id for c in chans):
+            raise Err("That channel is already in the list.")
+        link = await AD.make_invite_link(bot, chat)
+        if not link:
+            raise Err("Can't create an invite link. Give the bot the 'Invite Users' permission and try again.")
+        await CH.remember(chat)
+        chans.append({"id": chat.id, "title": chat.title or str(chat.id), "link": link})
+        await S.set("fsub_channels", chans)
+        out = await _fsub_view()
+        out["added"] = chat.title or str(chat.id)
+        return out
+    elif a is not None:
+        raise Err("unknown action")
+    return await _fsub_view()
+
+
+# ---- access: join buttons
+def _btns_view():
+    chans = S.get("fsub_channels") if S.get("fsub_enabled") else []
+    return {"rows": S.get("custom_buttons"),
+            "channels": [(c.get("title") or str(c["id"]))[:28] for c in chans],
+            "count": sum(len(r) for r in S.get("custom_buttons"))}
+
+
+def _clean_button(label, url):
+    label, url = str(label or "").strip(), str(url or "").strip()
+    if not label:
+        raise Err("Write the button text.")
+    if len(label) > 60:
+        raise Err("Button text is too long (max 60 characters).")
+    if " - " in label or "|" in label:
+        raise Err("Button text can't contain ' - ' or '|'.")
+    if not _URL_RE.match(url):
+        raise Err("The link must start with https://, http:// or tg://")
+    return [label, url]
+
+
+async def op_btns(uid, b, bot):
+    a = b.get("set")
+    rows = [list(map(list, r)) for r in S.get("custom_buttons")]
+    if a == "add":
+        btn = _clean_button(b.get("label"), b.get("url"))
+        if b.get("same_row") and rows:
+            if len(rows[-1]) >= 3:
+                raise Err("A row holds at most 3 buttons. Turn off 'same row'.")
+            rows[-1].append(btn)
+        else:
+            rows.append([btn])
+        if sum(len(r) for r in rows) > 20:
+            raise Err("Too many buttons (max 20).")
+        await S.set("custom_buttons", rows)
+    elif a == "del":
+        try:
+            r, c = int(b.get("r")), int(b.get("c"))
+            rows[r].pop(c)
+        except (TypeError, ValueError, IndexError):
+            raise Err("Button not found (maybe already removed).")
+        rows = [x for x in rows if x]
+        await S.set("custom_buttons", rows)
+    elif a == "bulk":
+        from handlers import admin as AD
+        text = str(b.get("text") or "")
+        if len(text) > 4000:
+            raise Err("Text too long.")
+        try:
+            new = AD.parse_buttons(text)
+        except ValueError as e:
+            raise Err(f"{e}. Format: Text - https://link")
+        await S.set("custom_buttons", new)
+    elif a == "clear":
+        await S.set("custom_buttons", [])
+    elif a is not None:
+        raise Err("unknown action")
+    return _btns_view()
+
+
+# ---- access: ban / unban
+async def _ban_view(bot):
+    total = await db.users_col.count_documents({"banned": True})
+    docs = await db.users_col.find({"banned": True}).sort("_id", 1).limit(50).to_list(50)
+    ids = [d["_id"] for d in docs]
+    await _names(bot, ids)
+    return {"total": total, "shown": len(ids),
+            "users": [{"id": i, "name": _NAMES.get(i, ("", ""))[0], "username": _NAMES.get(i, ("", ""))[1]}
+                      for i in ids]}
+
+
+async def op_ban(uid, b, bot):
+    a = b.get("set")
+    if a in ("ban", "unban"):
+        target = _user_id(b.get("value"))
+        if a == "ban":
+            if is_admin(target):
+                raise Err("You can't ban an admin.")
+            await db.set_banned(target, True)
+        else:
+            if not await db.is_banned(target):
+                raise Err("That user is not banned.")
+            await db.set_banned(target, False)
+    elif a == "unban_all":
+        await db.users_col.update_many({"banned": True}, {"$set": {"banned": False}})
+    elif a is not None:
+        raise Err("unknown action")
+    return await _ban_view(bot)
+
+
+# ---- access: admins (owner only - see OWNER_OPS)
+async def _admins_view(bot):
+    ids = [int(x) for x in S.get("admins")]
+    await _names(bot, [config.OWNER_ID] + ids)
+    nm = lambda i: {"id": i, "name": _NAMES.get(i, ("", ""))[0], "username": _NAMES.get(i, ("", ""))[1]}
+    return {"owner": nm(config.OWNER_ID), "admins": [nm(i) for i in ids]}
+
+
+async def op_admins(uid, b, bot):
+    a = b.get("set")
+    if a == "add":
+        target = _user_id(b.get("value"))
+        if is_owner(target):
+            raise Err("That is you, the owner. You are always an admin.")
+        admins = list(S.get("admins"))
+        if target in admins:
+            raise Err("That user is already an admin.")
+        admins.append(target)
+        await S.set("admins", admins)
+    elif a == "rm":
+        target = _user_id(b.get("value"))
+        admins = list(S.get("admins"))
+        if target not in admins:
+            raise Err("That user is not an admin (maybe already removed).")
+        await S.set("admins", [x for x in admins if x != target])
+    elif a is not None:
+        raise Err("unknown action")
+    return await _admins_view(bot)
 
 
 # ---- open a bot screen

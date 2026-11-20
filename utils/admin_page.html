@@ -110,6 +110,13 @@ code.cp{display:block;padding:10px 12px;border-radius:14px;font:12px/1.4 ui-mono
 .empty{padding:26px 8px;text-align:center;color:var(--t2)}
 .badge.off{color:var(--rose);background:rgba(196,21,63,.12);box-shadow:inset 0 0 0 1px rgba(196,21,63,.3)}.badge.off i{background:var(--rose)}
 
+.li{display:flex;align-items:center;gap:8px;padding:9px 0}.li+.li{border-top:1px solid var(--hair)}.li .tx{flex:1;min-width:0}
+.li .tx b{display:block;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.li .tx small{display:block;color:var(--t2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.li .btn.sm{flex:none}
+.pv{display:grid;gap:6px;padding:12px;border-radius:18px;background:var(--fill2)}.pvr{display:flex;gap:6px}
+.pvb{flex:1;min-width:0;padding:9px 6px;border-radius:10px;text-align:center;font-size:13px;font-weight:600;background:var(--fill);box-shadow:inset 0 0 0 1px var(--hair);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chk{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px}.chk input{width:18px;height:18px}
+.tag{display:inline-block;margin-left:6px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600;color:var(--jade-ink);background:rgb(var(--jade-bg))}
 /* ---- performance: smooth scrolling on phones ---- */
 .glass,.hero,.reset,.sec{-webkit-backdrop-filter:none!important;backdrop-filter:none!important;background:var(--glass)}
 @supports (background:color-mix(in srgb,red 50%,blue)){.glass,.hero,.reset,.sec{background:color-mix(in srgb,var(--bg) 78%,transparent)}}
@@ -174,7 +181,7 @@ function openInBot(action){return api('open',{action:action}).then(function(){to
 /* ---------- home ---------- */
 var SECTIONS=[
  {t:'Content',items:[['i-link','My links','View, revoke','open','links'],['i-db','Database channel','Files storage','open','dbch']]},
- {t:'Access',items:[['i-bell','Force-sub','Channels','open','fsub'],['i-pill','Join buttons','Custom','open','btns'],['i-ban','Ban / unban','Users','open','ban'],['i-shield','Admins','Owner only','open','admins',1]]},
+ {t:'Access',items:[['i-bell','Force-sub','Channels','sheet','fsub'],['i-pill','Join buttons','Custom','sheet','btns'],['i-ban','Ban / unban','Users','sheet','ban'],['i-shield','Admins','Owner only','sheet','admins',1]]},
  {t:'Start screen and files',items:[['i-image','Start image','Photo','open','simg'],['i-text','Start caption','Text','open','scap'],['i-tag','File caption','Custom','open','fcap'],['i-play','Delivery mode','How files arrive','open','mode']]},
  {t:'Quick settings',special:'quick'},
  {t:'Growth',items:[['i-mega','Broadcast','Message all','sheet','bc'],['i-chart','Stats','Overview','sheet','stats'],['i-tv','Ads','Monetag','sheet','ads'],['i-cal','Autoposter','Schedule','sheet','ap']]},
@@ -244,7 +251,7 @@ function dock(n){
 
 /* ---------- sheets ---------- */
 var cur=null,timer=null,H={};
-var TITLES={bc:'Broadcast',stats:'Stats',ads:'Ads (Monetag)',ap:'Autoposter',earnings:'Earnings',backup:'Backup',transfer:'Transfer',vps:'VPS usage'};
+var TITLES={fsub:'Force-sub',btns:'Join buttons',ban:'Ban / unban',admins:'Admins',bc:'Broadcast',stats:'Stats',ads:'Ads (Monetag)',ap:'Autoposter',earnings:'Earnings',backup:'Backup',transfer:'Transfer',vps:'VPS usage'};
 function stopTimer(){if(timer){clearInterval(timer);timer=null}}
 function openSheet(name){
   if(!TITLES[name])return;
@@ -352,6 +359,101 @@ function drawAp(d){
     if(s==='slot_add')v=$('#sl'+el.dataset.i).value;
     run(el.tagName==='BUTTON'?el:null,function(){return api('ap',{cid:el.dataset.c,set:s,value:v}).then(drawAp).then(function(){toast(s==='reshuffle'?'Queue reshuffled':'Updated')})});
   };
+}
+
+/* ----- Access: shared ----- */
+function who(u){return '<span class="tx"><b>'+esc(u.name||('User '+u.id))+'</b><small>'+(u.username?'@'+esc(u.username)+' · ':'')+u.id+'</small></span>'}
+
+/* ----- Access: Force-sub ----- */
+RENDER.fsub=function(){return api('fsub').then(drawFs)};
+function drawFs(d){
+  var h=card('Force-subscribe','<div class="kv"><span>Users must join the channels below</span>'+sw(d.on,'data-act="fs" data-s="toggle"')+'</div>'
+   +(d.on&&!d.channels.length?'<div class="note">⚠️ Force-sub is ON but no channel is added, so nobody is asked to join.</div>':'')
+   +(!d.on&&d.channels.length?'<div class="note">Force-sub is OFF: users get their files without joining.</div>':''));
+  h+=card('Channels ('+d.channels.length+')',d.channels.length?d.channels.map(function(c,i){
+    return '<div class="li"><span class="tx"><b>📢 '+esc(c.title)+'</b><small>'+esc(c.link)+'</small></span>'
+     +'<button type="button" class="btn sec sm" data-act="fs" data-s="up" data-c="'+c.id+'" aria-label="Move up"'+(i?'':' disabled')+'>▲</button>'
+     +'<button type="button" class="btn sec sm" data-act="fs" data-s="down" data-c="'+c.id+'" aria-label="Move down"'+(i<d.channels.length-1?'':' disabled')+'>▼</button>'
+     +'<button type="button" class="btn sec sm" data-act="fs" data-s="rm" data-c="'+c.id+'" aria-label="Remove">✕</button></div>'}).join('')
+    :'<div class="muted">No channel added yet.</div>');
+  h+=card('Add a channel','<input type="text" id="fsv" placeholder="@username, t.me link or -100… ID" autocomplete="off" autocapitalize="off"><button type="button" class="btn" data-act="fsadd">Add channel</button>'
+   +'<p class="muted" style="margin:10px 0 0">The bot must be an admin there. Private channels also need the “Invite Users” permission.</p>');
+  if(d.known.length)h+=card('Tap to add','<p class="muted" style="margin:0 0 4px">Chats where the bot is already an admin.</p>'+d.known.map(function(k){
+    return '<div class="li"><span class="tx"><b>'+(k.type==='channel'?'📢 ':'👥 ')+esc(k.title)+'</b><small>'+(k.username?'@'+esc(k.username)+' · ':'')+k.id+'</small></span><button type="button" class="btn sm" data-act="fs" data-s="add" data-v="'+k.id+'">Add</button></div>'}).join(''));
+  setBody(h);
+  H.fs=function(el){
+    var s=el.dataset.s;
+    var go=function(){return run(el.tagName==='BUTTON'?el:null,function(){
+      return api('fsub',{set:s,cid:el.dataset.c,value:el.dataset.v}).then(function(r){drawFs(r);toast(r.added?'Added '+r.added:s==='rm'?'Channel removed':'Updated')})})};
+    if(s==='rm')confirmBox('Remove this channel from force-sub?').then(function(ok){if(ok)go()});else go();
+  };
+  H.fsadd=function(b){
+    var v=$('#fsv').value.trim();if(!v){toast('Send the channel @username or ID',true);return}
+    run(b,function(){return api('fsub',{set:'add',value:v}).then(function(r){drawFs(r);toast('Added '+r.added)})});
+  };
+}
+
+/* ----- Access: Join buttons ----- */
+RENDER.btns=function(){return api('btns').then(drawBt)};
+function drawBt(d){
+  var chan='';for(var i=0;i<d.channels.length;i+=2)chan+='<div class="pvr">'+d.channels.slice(i,i+2).map(function(t){return '<span class="pvb">📢 '+esc(t)+'</span>'}).join('')+'</div>';
+  var custom=d.rows.map(function(r){return '<div class="pvr">'+r.map(function(b){return '<span class="pvb">'+esc(b[0])+'</span>'}).join('')+'</div>'}).join('');
+  var h=card('Preview','<p class="muted" style="margin:0 0 10px">How the join screen buttons look to users. Channel buttons come from Force-sub.</p><div class="pv">'+chan+custom+'<div class="pvr"><span class="pvb">✅ I’ve Joined</span></div></div>');
+  var list=[];d.rows.forEach(function(r,ri){r.forEach(function(b,ci){
+    list.push('<div class="li"><span class="tx"><b>'+esc(b[0])+'</b><small>Row '+(ri+1)+' · '+esc(b[1])+'</small></span><button type="button" class="btn sec sm" data-act="bt" data-s="del" data-r="'+ri+'" data-c="'+ci+'" aria-label="Remove">✕</button></div>')})});
+  h+=card('Custom buttons ('+d.count+')',list.length?list.join(''):'<div class="muted">No custom button yet.</div>');
+  h+=card('Add a button','<input type="text" id="bl" placeholder="Button text" maxlength="60" style="margin-bottom:8px"><input type="text" id="bu" placeholder="https://example.com" autocomplete="off" autocapitalize="off">'
+   +(d.rows.length?'<label class="chk"><input type="checkbox" id="bsame"> Same row as the previous button</label>':'')
+   +'<button type="button" class="btn" data-act="btadd">Add button</button>');
+  var txt=d.rows.map(function(r){return r.map(function(b){return b[0]+' - '+b[1]}).join(' | ')}).join('\n');
+  h+=card('Edit all at once','<p class="muted" style="margin:0 0 8px">One button per line: <code>Text - https://link</code>. Use <code>|</code> to put several buttons in one row.</p><textarea id="bbulk" style="min-height:100px" placeholder="Text - https://example.com">'+esc(txt)+'</textarea><button type="button" class="btn sec" data-act="btbulk">Save list</button>'
+   +(d.count?'<button type="button" class="btn red" data-act="btclr">Clear all custom buttons</button>':''));
+  setBody(h);
+  var call=function(b,data,msg){return run(b,function(){return api('btns',data).then(function(r){drawBt(r);toast(msg)})})};
+  H.btadd=function(b){var l=$('#bl').value.trim(),u=$('#bu').value.trim(),s=$('#bsame');
+    if(!l||!u){toast('Fill the button text and the link',true);return}
+    call(b,{set:'add',label:l,url:u,same_row:s&&s.checked?1:0},'Button added')};
+  H.bt=function(el){call(el,{set:'del',r:el.dataset.r,c:el.dataset.c},'Button removed')};
+  H.btbulk=function(b){call(b,{set:'bulk',text:$('#bbulk').value},'Buttons saved')};
+  H.btclr=function(b){confirmBox('Remove all custom buttons?').then(function(ok){if(ok)call(b,{set:'clear'},'Cleared')})};
+}
+
+/* ----- Access: Ban / Unban ----- */
+RENDER.ban=function(){return api('ban').then(drawBn)};
+function drawBn(d){
+  var h='<div class="grid3" style="margin-bottom:12px"><div class="mini"><b>'+N(d.total)+'</b><span>Banned users</span></div></div>';
+  h+=card('Ban or unban a user','<input type="text" id="bnid" inputmode="numeric" placeholder="Telegram user ID, e.g. 123456789" autocomplete="off"><div class="row2"><button type="button" class="btn red" data-act="bn" data-s="ban">🚫 Ban</button><button type="button" class="btn" data-act="bn" data-s="unban">✅ Unban</button></div>'
+   +'<button type="button" class="btn sec" data-act="bnchat">Ban by forwarded message (in chat)</button>'
+   +'<p class="muted" style="margin:10px 0 0">Admins can’t be banned. A banned user can’t use the bot or open any link.</p>');
+  h+=card('Banned users'+(d.total?' ('+N(d.total)+')':''),d.users.length?d.users.map(function(u){
+    return '<div class="li">'+who(u)+'<button type="button" class="btn sec sm" data-act="bn" data-s="unban" data-v="'+u.id+'">Unban</button></div>'}).join('')
+    +(d.total>d.shown?'<p class="muted" style="margin:10px 0 0">Showing the first '+d.shown+' of '+N(d.total)+'.</p>':'')
+    +'<button type="button" class="btn red" data-act="bnall">Unban everyone</button>':'<div class="muted">Nobody is banned.</div>');
+  setBody(h);
+  H.bn=function(el){
+    var s=el.dataset.s,v=el.dataset.v||($('#bnid')?$('#bnid').value.trim():'');
+    if(!v){toast('Send the user ID first',true);return}
+    var go=function(){return run(el,function(){return api('ban',{set:s,value:v}).then(function(r){drawBn(r);toast(s==='ban'?'🚫 Banned '+v:'✅ Unbanned '+v)})})};
+    if(s==='ban')confirmBox('Ban user '+v+'?').then(function(ok){if(ok)go()});else go();
+  };
+  H.bnall=function(b){confirmBox('Unban all '+N(d.total)+' users?').then(function(ok){if(ok)run(b,function(){return api('ban',{set:'unban_all'}).then(function(r){drawBn(r);toast('Everyone unbanned')})})})};
+  H.bnchat=function(){run(null,function(){return openInBot('ban')})};
+}
+
+/* ----- Access: Admins (owner only) ----- */
+RENDER.admins=function(){return api('admins').then(drawAd)};
+function drawAd(d){
+  var h=card('Owner','<div class="li">'+who(d.owner)+'<span class="tag">Owner</span></div><p class="muted" style="margin:6px 0 0">The owner is always an admin and can’t be removed.</p>');
+  h+=card('Admins ('+d.admins.length+')',d.admins.length?d.admins.map(function(u){
+    return '<div class="li">'+who(u)+'<button type="button" class="btn sec sm" data-act="ad" data-s="rm" data-v="'+u.id+'">Remove</button></div>'}).join(''):'<div class="muted">No extra admins yet.</div>');
+  h+=card('Add an admin','<input type="text" id="adid" inputmode="numeric" placeholder="Telegram user ID, e.g. 123456789" autocomplete="off"><button type="button" class="btn" data-act="adadd">Add admin</button>'
+   +'<button type="button" class="btn sec" data-act="adchat">Add by forwarded message (in chat)</button>'
+   +'<p class="muted" style="margin:10px 0 0">Admins can use this panel and are not asked to join force-sub channels. Only the owner can manage admins, backups and transfers.</p>');
+  setBody(h);
+  var call=function(b,data,msg){return run(b,function(){return api('admins',data).then(function(r){drawAd(r);toast(msg)})})};
+  H.ad=function(el){var v=el.dataset.v;confirmBox('Remove admin '+v+'?').then(function(ok){if(ok)call(el,{set:'rm',value:v},'Admin removed')})};
+  H.adadd=function(b){var v=$('#adid').value.trim();if(!v){toast('Send the user ID first',true);return}call(b,{set:'add',value:v},'Admin added')};
+  H.adchat=function(){run(null,function(){return openInBot('admins')})};
 }
 
 /* ----- Earnings ----- */
