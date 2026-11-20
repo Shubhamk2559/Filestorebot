@@ -5,6 +5,7 @@ Autoposter engine (no UI here - the panel lives in handlers/autoposter.py).
   parse_slots / fmt_slots   "09:00 2" style timing input
   item_from_ptb / item_from_pyro   one source message -> a small dict
   group_posts               caption file = thumbnail, captionless files below it = the post's files
+  group_pairs               "Image + Video" type: image 1, video 1, image 2, video 2 ... -> one post per pair
   create_posts              copy everything into the Database Channel (with backup codes), make links + post records
   send_post                 publish one post (thumbnail + caption + "Get Files" button) to a channel / group
   ensure_queue              shuffled queue: every post once per cycle in random order (loop = reshuffle each cycle,
@@ -139,8 +140,40 @@ def group_posts(items: list):
     return posts, orphans
 
 
+IMG_KINDS = ("photo",)
+VID_KINDS = ("video", "animation", "document")
+
+
+def group_pairs(items: list):
+    """
+    "Image + Video" type: the source is  image 1, video 1, image 2, video 2 ...
+    (image N + video N) = ONE post with two links: the image (free preview) and the video (ad gate).
+    Returns (posts, orphans). Each post = {"thumb": image item, "files": [video item], "pair": True}.
+    An image not followed by a video, or a video without an image above it, is an orphan (ignored).
+    """
+    posts, img, orphans = [], None, 0
+    for it in items:
+        if it["kind"] in IMG_KINDS:
+            if img is not None:
+                orphans += 1                    # the previous image never got its video
+            img = it
+        elif it["kind"] in VID_KINDS:
+            if img is None:
+                orphans += 1                    # a video without an image above it
+                continue
+            posts.append({"thumb": img, "files": [it], "pair": True})
+            img = None
+        else:
+            orphans += 1
+    if img is not None:
+        orphans += 1
+    return posts, orphans
+
+
 # ------------------------------------------------------------------ post caption / button (set from the admin panel)
 DEFAULT_BTN = "📥 Get Files"
+DEFAULT_BTN_IMG = "🖼 Preview"
+DEFAULT_BTN_VID = "🎬 Watch Video"
 BTN_MAX = 40
 
 
@@ -189,7 +222,10 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
                                     message_id=status_msg, reply_markup=kb)
         return
 
-    posts, orphans = group_posts(sorted(items, key=lambda i: i["mid"]))
+    ch = await db.ap_get_channel(cid) or {}
+    pair_mode = ch.get("ptype") == "pair"
+    items = sorted(items, key=lambda i: i["mid"])
+    posts, orphans = group_pairs(items) if pair_mode else group_posts(items)
     total_files = sum(1 + len(p["files"]) for p in posts if p["files"])
     seq = await db.ap_last_seq(cid)
     made = skipped = copied_files = 0
@@ -207,7 +243,8 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
         if skipped:
             text += f"⏭ Skipped (caption but no files below): {skipped}\n"
         if orphans:
-            text += f"⏭ Files before the first caption (ignored): {orphans}\n"
+            text += (f"⏭ Files without their image / video partner (ignored): {orphans}\n" if pair_mode
+                     else f"⏭ Files before the first caption (ignored): {orphans}\n")
         if error:
             text += f"\n❌ <code>{html.escape(error)}</code>"
         try:
@@ -219,6 +256,30 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
     for p in posts:
         if not p["files"]:
             skipped += 1
+            continue
+        if p.get("pair"):
+            # image -> free link (token), video -> ad-gated link (vtoken); both stored with their own backup code
+            img, vid = p["thumb"], p["files"][0]
+            token, vtoken = db.new_token(), db.new_token()
+            try:
+                img_id = await _store(bot, channel["id"], img, db.make_code(token, 0), by)
+                copied_files += 1
+                vid_id = await _store(bot, channel["id"], vid, db.make_code(vtoken, 0), by)
+                copied_files += 1
+            except TelegramError as e:
+                error = str(e)
+                break
+            cap_html = img["cap_html"] if img["cap"].strip() else vid["cap_html"]
+            plain = img["cap"].strip() or vid["cap"].strip()
+            title = re.sub(r"\s+", " ", plain).strip()[:40] or "Image + Video"
+            await db.create_link([img_id], by, title + " (preview)", token=token, no_ads=True)
+            await db.create_link([vid_id], by, title + " (video)", token=vtoken)
+            seq += 1
+            await db.ap_add_post(cid, token, None, seq, title, cap_html, "photo", 2, by,
+                                 ptype="pair", vtoken=vtoken)
+            made += 1
+            new_tokens.append(token)
+            await progress()
             continue
         token, thumb_token = db.new_token(), db.new_token()
         ids = []
@@ -252,12 +313,15 @@ async def send_post(bot, chat_id: int, post: dict, mark: bool = True):
     channel = S.get("db_channel")
     if not channel:
         return "Database Channel is not set"
-    thumb = await db.thumb_msg_id(db.make_code(post["thumb_token"], 0))
+    ch = await db.ap_get_channel(chat_id) or {}
+    if post.get("ptype") == "pair":
+        thumb, kb = await _pair_media(bot, ch, post)
+    else:
+        thumb = await db.thumb_msg_id(db.make_code(post["thumb_token"], 0))
+        btn = (ch.get("btn") or "").strip() or DEFAULT_BTN
+        kb = M([[B(btn, url=share_link(bot.username, post["_id"]))]])
     if not thumb:
         return "thumbnail not found in the Database Channel"
-    ch = await db.ap_get_channel(chat_id) or {}
-    btn = (ch.get("btn") or "").strip() or DEFAULT_BTN
-    kb = M([[B(btn, url=share_link(bot.username, post["_id"]))]])
     try:
         await call(bot.copy_message, chat_id, channel["id"], thumb,
                    caption=render_caption(ch.get("cap_tpl"), post["cap"]),
@@ -267,6 +331,23 @@ async def send_post(bot, chat_id: int, post: dict, mark: bool = True):
     if mark:
         await db.ap_mark_posted(post["_id"])
     return None
+
+
+async def _pair_media(bot, ch: dict, post: dict):
+    """(DB-channel message id to show, keyboard) of an Image + Video post.
+    The picture = the channel's fixed thumbnail; if none is set, the post's own image. Two buttons: preview + video."""
+    thumb = None
+    if ch.get("fthumb"):
+        thumb = await db.thumb_msg_id(db.make_code(ch["fthumb"], 0))
+    if not thumb:                                     # no fixed thumbnail (or it is gone) -> the post's own image
+        link = await db.get_link(post["_id"])
+        ids = [i for i in (link or {}).get("ids", []) if i]
+        thumb = ids[0] if ids else None
+    b_img = (ch.get("btn_img") or "").strip() or DEFAULT_BTN_IMG
+    b_vid = (ch.get("btn_vid") or "").strip() or DEFAULT_BTN_VID
+    kb = M([[B(b_img, url=share_link(bot.username, post["_id"])),
+             B(b_vid, url=share_link(bot.username, post["vtoken"]))]])
+    return thumb, kb
 
 
 _locks: dict = {}

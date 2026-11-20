@@ -2,7 +2,6 @@
 utils/web.py - aiohttp server.
 
   GET /ad, POST /api/ad/*, GET /monetag/postback   Monetag rewarded-ad Mini App (utils/ads.py)
-  GET /admin, POST /api/admin   web Admin Panel Mini App (utils/admin_web.py)
   GET /<token>            permanent share link -> redirects to the current bot on Telegram
   GET /, /health          health checks (Koyeb / Render / Heroku / VPS)
   GET|HEAD /dl/<token>/<msg_id>[?d=1]
@@ -21,7 +20,7 @@ from aiohttp import web
 
 from database import db
 from database.db import settings as S
-from utils import ads, admin_web
+from utils import ads
 from utils import home, usage
 from utils.streamer import RangeError, parse_range, streamer
 
@@ -136,7 +135,6 @@ async def start_web_server(port: int, bot=None):
     app = web.Application()
     app["bot"] = bot
     ads.setup_routes(app)   # /ad (Mini App), /api/ad/*, /monetag/postback
-    admin_web.setup_routes(app)   # /admin (web admin panel Mini App), /api/admin
     app.router.add_get("/", home.page)                       # landing page (utils/home.py)
     app.router.add_get("/assets/home-image", home.image)
     app.router.add_get("/health", health)
