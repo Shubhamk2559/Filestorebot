@@ -134,6 +134,7 @@ async def a_aptype(update, context, args):
     await show_channel(update, cid,
                        ("🖼+🎬 <b>Image + Video</b>: new posts are made from image 1, video 1, image 2, video 2 …\n"
                         "Image link = free preview (no ad) · Video link = ad gate.\n"
+                        "Posted with the fixed thumbnail + fixed caption (🎨 Caption & Button).\n"
                         "Posts you already created keep their own type.\n\n"
                         if ch.get("ptype") == "pair" else
                         "🎞 <b>Classic</b>: captioned file = thumbnail, captionless files below it = the post's files.\n"
@@ -233,7 +234,7 @@ async def show_cb(update, cid: int, note: str = ""):
                f"📝 Fixed caption:\n{tpl or '— not set (each post uses its own caption) —'}\n\n"
                f"🔘 Button: <b>{html.escape(btn)}</b>\n\n"
                f"🖼+🎬 <b>Image + Video posts</b>\n"
-               f"🖼 Fixed thumbnail: <b>{'set ✅' if ch.get('fthumb') else 'not set (the post uses its own image)'}</b>\n"
+               f"🖼 Fixed thumbnail: <b>{'set ✅' if ch.get('fthumb') else 'not set ⚠️ (required for Image + Video posts)'}</b>\n"
                f"🔘 Buttons: <b>{html.escape(ch.get('btn_img') or AP.DEFAULT_BTN_IMG)}</b> · "
                f"<b>{html.escape(ch.get('btn_vid') or AP.DEFAULT_BTN_VID)}</b>\n\n"
                "This one fixed caption is used on every post of this channel (also the ones already created).",
@@ -313,7 +314,7 @@ async def a_apthumb(update, context, args):
               "🖼 <b>Fixed thumbnail</b> (Image + Video posts)\n\nSend ONE photo. Every Image + Video post of this channel "
               "is posted with this picture (the buttons open the preview / video links).\n"
               "It is saved in the Database Channel with a backup code.\n"
-              "Send <code>-</code> to remove it (then each post uses its own image).")
+              "Send <code>-</code> to remove it (Image + Video posts cannot be sent without it).")
 
 
 @state("ap_thumb")
@@ -561,7 +562,9 @@ async def a_apnew(update, context, args):
         how = ("🖼+🎬 <b>Image + Video</b> type\n\n"
                "Order: image 1, video 1, image 2, video 2 … Each (image + video) = one post with two links:\n"
                "🖼 image = free preview (no ad) · 🎬 video = opens only after the ad.\n"
-               "The post is shown with the channel's fixed thumbnail (🎨 Caption & Button) or, if none is set, its own image.\n")
+               "The post is shown with the channel's <b>fixed thumbnail + fixed caption</b> (🎨 Caption & Button), "
+               "never with the post's own image.\n"
+               + ("" if ch.get("fthumb") else "\n⚠️ <b>Fixed thumbnail is not set yet</b> - set it first, otherwise these posts cannot be sent.\n"))
     else:
         how = ("🎞 <b>Classic</b> type\n\n"
                "A file <b>with a caption</b> = the post's thumbnail. All files <b>without a caption</b> right below it "
