@@ -321,10 +321,11 @@ async def send_post(bot, chat_id: int, post: dict, mark: bool = True):
         btn = (ch.get("btn") or "").strip() or DEFAULT_BTN
         kb = M([[B(btn, url=share_link(bot.username, post["_id"]))]])
     if not thumb:
-        return "thumbnail not found in the Database Channel"
+        return ("fixed thumbnail not set (Caption & Button -> Fixed Thumbnail)" if post.get("ptype") == "pair"
+                else "thumbnail not found in the Database Channel")
     try:
         await call(bot.copy_message, chat_id, channel["id"], thumb,
-                   caption=render_caption(ch.get("cap_tpl"), post["cap"]),
+                   caption=render_caption(ch.get("cap_tpl"), "" if post.get("ptype") == "pair" else post["cap"]),
                    parse_mode=ParseMode.HTML, reply_markup=kb)
     except TelegramError as e:
         return str(e)
@@ -335,14 +336,10 @@ async def send_post(bot, chat_id: int, post: dict, mark: bool = True):
 
 async def _pair_media(bot, ch: dict, post: dict):
     """(DB-channel message id to show, keyboard) of an Image + Video post.
-    The picture = the channel's fixed thumbnail; if none is set, the post's own image. Two buttons: preview + video."""
+    The picture = the channel's fixed thumbnail only (the post's own image is never used). Two buttons: preview + video."""
     thumb = None
     if ch.get("fthumb"):
-        thumb = await db.thumb_msg_id(db.make_code(ch["fthumb"], 0))
-    if not thumb:                                     # no fixed thumbnail (or it is gone) -> the post's own image
-        link = await db.get_link(post["_id"])
-        ids = [i for i in (link or {}).get("ids", []) if i]
-        thumb = ids[0] if ids else None
+        thumb = await db.thumb_msg_id(db.make_code(ch["fthumb"], 0))      # ONLY the fixed thumbnail, never the post's image
     b_img = (ch.get("btn_img") or "").strip() or DEFAULT_BTN_IMG
     b_vid = (ch.get("btn_vid") or "").strip() or DEFAULT_BTN_VID
     kb = M([[B(b_img, url=share_link(bot.username, post["_id"])),
