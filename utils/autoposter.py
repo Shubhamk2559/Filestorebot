@@ -273,12 +273,12 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
             cap_html = img["cap_html"] if img["cap"].strip() else vid["cap_html"]
             plain = img["cap"].strip() or vid["cap"].strip()
             title = re.sub(r"\s+", " ", plain).strip()[:40] or "Image + Video"
-            preview_url = await PV.make_preview_url(channel["id"], img_id, title)   # imgbb -> Telegraph (None = off / failed)
+            preview_url, image_url = await PV.make_preview_url(channel["id"], img_id, title)   # imgbb -> Telegraph (None = off / failed)
             await db.create_link([img_id], by, title + " (preview)", token=token, no_ads=True)
             await db.create_link([vid_id], by, title + " (video)", token=vtoken)
             seq += 1
             await db.ap_add_post(cid, token, None, seq, title, cap_html, "photo", 2, by,
-                                 ptype="pair", vtoken=vtoken, preview_url=preview_url)
+                                 ptype="pair", vtoken=vtoken, preview_url=preview_url, image_url=image_url)
             made += 1
             new_tokens.append(token)
             await progress()
@@ -344,7 +344,11 @@ async def _pair_media(bot, ch: dict, post: dict):
         thumb = await db.thumb_msg_id(db.make_code(ch["fthumb"], 0))      # ONLY the fixed thumbnail, never the post's image
     b_img = (ch.get("btn_img") or "").strip() or DEFAULT_BTN_IMG
     b_vid = (ch.get("btn_vid") or "").strip() or DEFAULT_BTN_VID
-    img_url = post.get("preview_url") or share_link(bot.username, post["_id"])     # Telegraph page, else the bot link
+    # Telegraph page while it (and its imgbb picture) still works, else the bot link - the image is always backed up
+    # in the Database Channel behind that link, so the Preview button never dies.
+    img_url = post.get("preview_url")
+    if not img_url or not await PV.alive(img_url, post.get("image_url")):
+        img_url = share_link(bot.username, post["_id"])
     kb = M([[B(b_img, url=img_url),
              B(b_vid, url=share_link(bot.username, post["vtoken"]))]])
     return thumb, kb

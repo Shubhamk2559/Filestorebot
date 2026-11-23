@@ -75,14 +75,30 @@ async def _telegraph_page(session: aiohttp.ClientSession, title: str, image_url:
 
 
 async def make_preview_url(chat_id: int, msg_id: int, title: str):
-    """imgbb -> Telegraph. Returns the article URL, or None (not configured / any error)."""
+    """imgbb -> Telegraph. Returns (article URL, imgbb image URL), or (None, None) (not configured / any error)."""
     if not enabled():
-        return None
+        return None, None
     try:
         data = await _download(chat_id, msg_id)
         async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
             image_url = await _imgbb_upload(session, data)
-            return await _telegraph_page(session, title, image_url)
+            return await _telegraph_page(session, title, image_url), image_url
     except Exception as e:
         log.warning("Preview page failed (%s): %s", type(e).__name__, e)
-        return None
+        return None, None
+
+
+async def alive(*urls) -> bool:
+    """False only when a link is DEFINITELY gone (HTTP 404/410 etc.). A network hiccup counts as alive,
+    so a temporary problem never throws away a good Telegraph link."""
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            for u in urls:
+                if not u:
+                    continue
+                async with session.get(u, allow_redirects=True) as r:
+                    if r.status in (404, 410) or 400 <= r.status < 500 and r.status != 429:
+                        return False
+    except Exception:
+        return True
+    return True
