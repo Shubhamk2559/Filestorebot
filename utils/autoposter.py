@@ -29,6 +29,7 @@ from database import db
 from database.db import settings as S
 from utils.helpers import call, notify_owner
 from utils.links import share_link
+from utils import preview as PV
 
 log = logging.getLogger(__name__)
 
@@ -272,11 +273,12 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
             cap_html = img["cap_html"] if img["cap"].strip() else vid["cap_html"]
             plain = img["cap"].strip() or vid["cap"].strip()
             title = re.sub(r"\s+", " ", plain).strip()[:40] or "Image + Video"
+            preview_url = await PV.make_preview_url(channel["id"], img_id, title)   # imgbb -> Telegraph (None = off / failed)
             await db.create_link([img_id], by, title + " (preview)", token=token, no_ads=True)
             await db.create_link([vid_id], by, title + " (video)", token=vtoken)
             seq += 1
             await db.ap_add_post(cid, token, None, seq, title, cap_html, "photo", 2, by,
-                                 ptype="pair", vtoken=vtoken)
+                                 ptype="pair", vtoken=vtoken, preview_url=preview_url)
             made += 1
             new_tokens.append(token)
             await progress()
@@ -342,7 +344,8 @@ async def _pair_media(bot, ch: dict, post: dict):
         thumb = await db.thumb_msg_id(db.make_code(ch["fthumb"], 0))      # ONLY the fixed thumbnail, never the post's image
     b_img = (ch.get("btn_img") or "").strip() or DEFAULT_BTN_IMG
     b_vid = (ch.get("btn_vid") or "").strip() or DEFAULT_BTN_VID
-    kb = M([[B(b_img, url=share_link(bot.username, post["_id"])),
+    img_url = post.get("preview_url") or share_link(bot.username, post["_id"])     # Telegraph page, else the bot link
+    kb = M([[B(b_img, url=img_url),
              B(b_vid, url=share_link(bot.username, post["vtoken"]))]])
     return thumb, kb
 
