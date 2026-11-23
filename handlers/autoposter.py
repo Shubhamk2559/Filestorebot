@@ -237,9 +237,12 @@ async def show_cb(update, cid: int, note: str = ""):
                f"🖼 Fixed thumbnail: <b>{'set ✅' if ch.get('fthumb') else 'not set ⚠️ (required for Image + Video posts)'}</b>\n"
                f"🔘 Buttons: <b>{html.escape(ch.get('btn_img') or AP.DEFAULT_BTN_IMG)}</b> · "
                f"<b>{html.escape(ch.get('btn_vid') or AP.DEFAULT_BTN_VID)}</b>\n\n"
+               f"🌐 imgbb API key: <b>{'set ✅' if S.get('imgbb_key') else 'not set (preview button opens the bot link)'}</b>\n"
+               "<i>(global - one key for every channel)</i>\n\n"
                "This one fixed caption is used on every post of this channel (also the ones already created).",
                M([[B("📝 Edit Caption", f"adm:apcap:{cid}"), B("🔘 Edit Button", f"adm:apbtn:{cid}")],
                   [B("🖼 Fixed Thumbnail", f"adm:apthumb:{cid}"), B("🔘 Pair Buttons", f"adm:appbtn:{cid}")],
+                  [B("🌐 imgbb API Key", f"adm:apimg:{cid}")],
                   [B("♻️ Reset to default", f"adm:apcbr:{cid}")],
                   [B("🔙 Back", f"adm:apc:{cid}")]]))
 
@@ -374,6 +377,37 @@ async def st_ap_pbtn(update, context):
     await db.ap_set(cid, btn_img=img, btn_vid=vid)
     context.user_data.pop("state", None)
     await msg.reply_text("✅ Buttons saved.", reply_markup=K.back(f"apcb:{cid}"))
+
+
+@action("apimg")
+async def a_apimg(update, context, args):
+    context.user_data["ap_cid"] = int(args[0])
+    await ask(update, context, "ap_imgkey",
+              "🌐 <b>imgbb API key</b> (Image + Video posts)\n\n"
+              "Send your key from <code>api.imgbb.com</code>. The preview image of every new Image + Video post is uploaded "
+              "to imgbb, shown in a Telegraph article, and the 🖼 button opens that Telegraph link directly.\n"
+              "Your message with the key is deleted right after it is saved.\n"
+              "Send <code>-</code> to remove the key (the button goes back to the bot link).\n\n"
+              "<i>Needs API_ID / API_HASH to be set (MTProto engine).</i>")
+
+
+@state("ap_imgkey")
+async def st_ap_imgkey(update, context):
+    msg = update.effective_message
+    cid = context.user_data.get("ap_cid")
+    txt = (msg.text or "").strip()
+    if not txt or cid is None or " " in txt or len(txt) > 100:
+        await msg.reply_text("⚠️ Send just the API key (one word).", reply_markup=K.cancel())
+        return
+    await S.set("imgbb_key", "" if txt == "-" else txt)
+    context.user_data.pop("state", None)
+    try:
+        await msg.delete()                      # do not leave the key in the chat
+    except Exception:
+        pass
+    await context.bot.send_message(
+        msg.chat_id, "✅ imgbb key removed." if txt == "-" else "✅ imgbb key saved.",
+        reply_markup=K.back(f"apcb:{cid}"))
 
 
 # ===================================================================== timings
