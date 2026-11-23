@@ -5,7 +5,7 @@ Telegraph link becomes the "Preview" button (opens directly, the bot is not invo
 
   make_preview_url(db_channel_id, msg_id, title)  ->  "https://telegra.ph/..." or None
 
-Needs IMGBB_API_KEY in the environment and the MTProto engine (API_ID / API_HASH) to read the image back
+Needs the imgbb API key (set from the admin panel: Autoposter -> channel -> Caption & Button -> imgbb API Key) and the MTProto engine (API_ID / API_HASH) to read the image back
 from the Database Channel. Any failure returns None, and the caller falls back to the normal bot link.
 """
 import base64
@@ -13,7 +13,6 @@ import logging
 
 import aiohttp
 
-import config
 from database.db import settings as S
 from utils.streamer import streamer
 
@@ -25,7 +24,7 @@ _TIMEOUT = aiohttp.ClientTimeout(total=60)
 
 
 def enabled() -> bool:
-    return bool(config.IMGBB_API_KEY)
+    return bool(S.get("imgbb_key"))
 
 
 async def _download(chat_id: int, msg_id: int) -> bytes:
@@ -39,7 +38,7 @@ async def _download(chat_id: int, msg_id: int) -> bytes:
 
 async def _imgbb_upload(session: aiohttp.ClientSession, data: bytes) -> str:
     form = aiohttp.FormData()
-    form.add_field("key", config.IMGBB_API_KEY)
+    form.add_field("key", S.get("imgbb_key"))
     form.add_field("image", base64.b64encode(data).decode())
     async with session.post(IMGBB_URL, data=form) as r:
         js = await r.json(content_type=None)
