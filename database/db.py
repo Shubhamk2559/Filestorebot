@@ -113,7 +113,7 @@ class SettingsCache:
         self._data[key] = value
         await settings_col.update_one({"_id": "main"}, {"$set": {key: value}}, upsert=True)
 
-    async def reset(self, keep=("admins", "db_channel", "ads_secret", "bk_last")):
+    async def reset(self, keep=("admins", "db_channel", "ads_secret", "bk_last", "imgbb_key", "telegraph_token")):
         """Restore defaults but keep admins and the database channel."""
         kept = {k: self._data.get(k) for k in keep}
         fresh = copy.deepcopy(DEFAULTS)
