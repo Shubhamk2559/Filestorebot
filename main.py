@@ -24,6 +24,7 @@ from handlers import backup as _backup          # registers the Backup / Restore
 from handlers import analytics as _analytics    # registers the Earnings / Analytics screens
 from handlers import transfer as _transfer      # registers the Transfer screens (user-account channel copy)
 from handlers import usage as _usage            # registers the VPS Usage / Plan advice screens
+from handlers import contact                    # users can message the owner through the bot
 from utils.backup import backup_loop
 from utils import padding
 from utils import chats as _chats
@@ -106,6 +107,7 @@ def main():
     app.add_handler(CommandHandler("start", start.start_cmd, filters=private))        # the ONLY command
     app.add_handler(CallbackQueryHandler(admin.callback_router, pattern=r"^adm:"))
     app.add_handler(CallbackQueryHandler(start.check_callback, pattern=r"^chk:"))
+    app.add_handler(CallbackQueryHandler(contact.callback, pattern=r"^ct:"))          # Reply / Ban under forwarded user messages
     # a backup file (fsb-backup-*.json.gz) sent by the owner -> restore flow (must come BEFORE the generic router)
     app.add_handler(MessageHandler(private & filters.Document.ALL & _backup.BackupDocFilter(), _backup.ingest))
     app.add_handler(MessageHandler(private & ~filters.COMMAND, admin.message_router))
