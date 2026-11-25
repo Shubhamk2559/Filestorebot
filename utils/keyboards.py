@@ -18,23 +18,60 @@ def after_link():
     return M([[B("🔗 My Links", callback_data="adm:links"), B("🔙 Panel", callback_data="adm:home")]])
 
 
+def _b(text, data):
+    return B(text.upper(), callback_data=data)
+
+
+def _grid(items):
+    """items = [(label, callback)] -> rows of 2 buttons."""
+    return [[_b(*items[i]) for i in range(j, min(j + 2, len(items)))] for j in range(0, len(items), 2)]
+
+
 def main_panel(owner: bool):
-    rows = [
-        [B("📦 Create Batch", callback_data="adm:batch"), B("🔗 My Links", callback_data="adm:links")],
-        [B("📡 Database Channel", callback_data="adm:dbch"), B("🔔 Force-Sub", callback_data="adm:fsub")],
-        [B("🖼 Start Image", callback_data="adm:simg"), B("📝 Start Caption", callback_data="adm:scap")],
-        [B("🔘 Join Buttons", callback_data="adm:btns"), B("⏱ Auto-Delete", callback_data="adm:autodel")],
-        [B("🎬 Delivery Mode", callback_data="adm:mode"), B("🛡 Protect Content", callback_data="adm:protect")],
-        [B("🏷 File Caption", callback_data="adm:fcap")],
-        [B("📢 Broadcast", callback_data="adm:bc"), B("📊 Stats", callback_data="adm:stats")],
-        [B("📺 Ads (Monetag)", callback_data="adm:ads"), B("🚫 Ban / Unban", callback_data="adm:ban")],
-        [B("📅 Autoposter", callback_data="adm:ap")],
+    items = [
+        ("📦 Create Batch", "adm:batch"), ("🔗 My Links", "adm:links"),
+        ("📅 Autoposter", "adm:ap"), ("👥 Users", "adm:users"),
+        ("💰 Monetization", "adm:monet"),
     ]
-    last = [B("♻️ Reset Settings", callback_data="adm:reset")]
     if owner:
-        last.insert(0, B("👮 Admins", callback_data="adm:admins"))
-    rows.append(last)
+        items += [("🖥️ Servers", "adm:servers"), ("💾 Backup", "adm:bk")]
+    items += [("⚙️ Settings", "adm:settings"), ("📢 Broadcast", "adm:bc"), ("📊 Statistics", "adm:stats")]
+    rows = _grid(items)
+    rows.append([_b("✖️ Close", "adm:close")])
+    return M(rows)
+
+
+def settings_panel():
+    rows = _grid([
+        ("📡 Database Channel", "adm:dbch"), ("🔔 Force-Sub", "adm:fsub"),
+        ("🖼 Start Image", "adm:simg"), ("📝 Start Caption", "adm:scap"),
+        ("🔘 Join Buttons", "adm:btns"), ("⏱ Auto-Delete", "adm:autodel"),
+        ("🎬 Delivery Mode", "adm:mode"), ("🛡 Protect Content", "adm:protect"),
+        ("🏷 File Caption", "adm:fcap"), ("♻️ Reset Settings", "adm:reset"),
+    ])
+    rows.append([_b("🔙 Back", "adm:home")])
+    return M(rows)
+
+
+def users_panel(owner: bool):
+    items = [("🚫 Ban / Unban", "adm:ban")]
     if owner:
-        rows.append([B("📈 Earnings", callback_data="adm:an"), B("💾 Backup", callback_data="adm:bk")])
-        rows.append([B("🔄 Transfer", callback_data="adm:tr"), B("🖥 VPS Usage", callback_data="adm:vps")])
+        items.append(("👮 Admins", "adm:admins"))
+    rows = _grid(items)
+    rows.append([_b("🔙 Back", "adm:home")])
+    return M(rows)
+
+
+def monetization_panel(owner: bool):
+    items = [("📺 Ads (Monetag)", "adm:ads")]
+    if owner:
+        items.append(("📈 Earnings", "adm:an"))
+    rows = _grid(items)
+    rows.append([_b("🔙 Back", "adm:home")])
+    return M(rows)
+
+
+def servers_panel():
+    rows = _grid([("🖥 VPS Usage", "adm:vps"), ("🔄 Transfer", "adm:tr")])
+    rows.append([_b("🔙 Back", "adm:home")])
     return M(rows)
