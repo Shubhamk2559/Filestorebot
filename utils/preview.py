@@ -8,7 +8,6 @@ Telegraph link becomes the "Preview" button (opens directly, the bot is not invo
 Needs the imgbb API key (set from the admin panel: Autoposter -> channel -> Caption & Button -> imgbb API Key) and the MTProto engine (API_ID / API_HASH) to read the image back
 from the Database Channel. Any failure returns None, and the caller falls back to the normal bot link.
 """
-import base64
 import logging
 
 import aiohttp
@@ -24,7 +23,8 @@ _TIMEOUT = aiohttp.ClientTimeout(total=60)
 
 
 def enabled() -> bool:
-    return bool(S.get("imgbb_key"))
+    from utils import batch               # imgbb keys (one or several, rotation) live in utils/batch.py
+    return batch.enabled()
 
 
 async def _download(chat_id: int, msg_id: int) -> bytes:
@@ -37,14 +37,8 @@ async def _download(chat_id: int, msg_id: int) -> bytes:
 
 
 async def _imgbb_upload(session: aiohttp.ClientSession, data: bytes) -> str:
-    form = aiohttp.FormData()
-    form.add_field("key", S.get("imgbb_key"))
-    form.add_field("image", base64.b64encode(data).decode())
-    async with session.post(IMGBB_URL, data=form) as r:
-        js = await r.json(content_type=None)
-    if not js.get("success"):
-        raise RuntimeError(f"imgbb: {(js.get('error') or {}).get('message', js)}")
-    return js["data"]["url"]                      # direct image link (i.ibb.co/...)
+    from utils import batch
+    return await batch.upload(session, data)      # direct image link (i.ibb.co/...), several keys in rotation
 
 
 async def _telegraph_token(session: aiohttp.ClientSession) -> str:

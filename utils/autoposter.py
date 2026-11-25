@@ -30,6 +30,7 @@ from database.db import settings as S
 from utils.helpers import call, notify_owner
 from utils.links import share_link
 from utils import preview as PV
+from utils import batch as BT
 
 log = logging.getLogger(__name__)
 
@@ -316,6 +317,8 @@ async def send_post(bot, chat_id: int, post: dict, mark: bool = True):
     if not channel:
         return "Database Channel is not set"
     ch = await db.ap_get_channel(chat_id) or {}
+    if post.get("ptype") == "batch":
+        return await _send_batch(bot, chat_id, channel, post)
     if post.get("ptype") == "pair":
         thumb, kb = await _pair_media(bot, ch, post)
     else:
@@ -333,6 +336,41 @@ async def send_post(bot, chat_id: int, post: dict, mark: bool = True):
         return str(e)
     if mark:
         await db.ap_mark_posted(post["_id"])
+    return None
+
+
+_numlocks: dict = {}
+
+
+def _fit(cap: str) -> str:
+    """Keep a caption inside Telegram's limit (after the tags were replaced it can be a bit longer)."""
+    if _plain_len(cap) <= CAPTION_MAX:
+        return cap
+    plain = html.unescape(re.sub(r"<[^>]+>", "", cap))
+    return html.escape(plain[:CAPTION_MAX])
+
+
+async def _send_batch(bot, chat_id: int, channel: dict, post: dict):
+    """Folder Batch post: the captioned photo + the channel's fixed caption. The tags {Preview Image} / {Video Link} /
+    {Post Number} are replaced ONLY when the channel's type is Folder Batch (otherwise the text goes out as written).
+    The post number is taken now, at posting time: last number + 1. It is saved only after Telegram accepted the
+    post, and the whole step is serialised per channel -> never a repeat, never a gap, a failed send reuses it."""
+    thumb = await db.thumb_msg_id(db.make_code(post["thumb_token"], 0))
+    if not thumb:
+        return "thumbnail not found in the Database Channel"
+    async with _numlocks.setdefault(chat_id, asyncio.Lock()):
+        ch = await db.ap_get_channel(chat_id) or {}
+        tags_on = ch.get("ptype") == "batch"
+        number = int(ch.get("post_no") or 0) + 1
+        cap = render_caption(ch.get("cap_tpl"), post["cap"])
+        if tags_on:
+            video = share_link(bot.username, post["vtoken"]) if post.get("vtoken") else ""
+            cap = BT.apply_tags(cap, post.get("tg_url") or "", video, number)
+        try:
+            await call(bot.copy_message, chat_id, channel["id"], thumb, caption=_fit(cap), parse_mode=ParseMode.HTML)
+        except TelegramError as e:
+            return str(e)
+        await BT.after_posted(chat_id, post, number if tags_on else None)
     return None
 
 
@@ -398,6 +436,9 @@ async def run_slot(bot, ch: dict, n: int):
         if not ch or not ch.get("enabled", True):
             return
         loop = ch.get("loop", True)
+        if ch.get("ptype") == "batch":
+            await _run_slot_batch(bot, ch)
+            return
         ch = await ensure_queue(cid, ch)
         if not ch:
             return
@@ -437,6 +478,31 @@ async def run_slot(bot, ch: dict, n: int):
             await notify_owner(bot, f"ap_done_{cid}",
                                f"⏸ Autoposter: every post of <b>{html.escape(ch.get('title', ''))}</b> is posted "
                                "(one pass). Create more posts and turn it ON, or reshuffle to start over.", every=60)
+
+
+async def _run_slot_batch(bot, ch: dict):
+    """Folder Batch channel: at most ONE post per time. Posts of the same folder keep the gap (30+ days, random jitter),
+    and any two posts of the channel are at least `min_hours` apart - so nothing ever goes out together."""
+    cid = ch["_id"]
+    post, why = await BT.pick_post(cid, ch)
+    if not post:
+        if why == "empty":
+            total = (await db.ap_counts(cid))[0]
+            busy = (await BT.counts(cid))[0]
+            if total and not busy:
+                if ch.get("loop", True):
+                    await BT.restart_cycle(cid, ch)
+                else:
+                    await db.ap_set(cid, enabled=False)
+                    await notify_owner(bot, f"ap_done_{cid}",
+                                       f"⏸ Autoposter: every post of <b>{html.escape(ch.get('title', ''))}</b> is posted "
+                                       "(one pass). Create more posts and turn it ON.", every=60)
+        return
+    err = await send_post(bot, cid, post, mark=False)
+    if err:
+        await notify_owner(bot, f"ap_err_{cid}",
+                           f"⚠️ Autoposter: cannot post in <b>{html.escape(ch['title'])}</b>:\n"
+                           f"<code>{html.escape(err)}</code>", every=1800)
 
 
 async def autopost_loop(bot):
