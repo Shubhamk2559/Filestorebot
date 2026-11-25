@@ -62,7 +62,7 @@ def B(text, callback_data):
 NOPREVIEW = LinkPreviewOptions(is_disabled=True)
 PAGE = 8
 MAX_RANGE = 10000
-TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst", "tr_cl", "tr_wp", "pick_state", "pick_kind", "picked_chat")
+TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst", "tr_cl", "tr_wp", "pick_state", "pick_kind", "picked_chat", "ct_uid")
 
 _KB_CLEANED = set()        # admins whose old bottom keyboard was already removed since the bot started
 
@@ -307,7 +307,12 @@ async def message_router(update, context):
     """Every non-command private message lands here."""
     user, msg = update.effective_user, update.effective_message
 
-    if not user or not msg or not is_admin(user.id):
+    if not user or not msg:
+        return
+
+    if not is_admin(user.id):          # a normal user writes to the bot -> forwarded to the owner
+        from handlers import contact
+        await contact.relay(update, context)
         return
 
     await _kb_cleanup(update)
@@ -320,6 +325,12 @@ async def message_router(update, context):
         return
 
     st = context.user_data.get("state")
+
+    # owner used Telegram's Reply on a forwarded user message -> deliver to that user
+    if is_owner(user.id) and msg.reply_to_message and st != "batch":
+        from handlers import contact
+        if await contact.try_native_reply(update, context):
+            return
 
     if st == "batch":
         await upload.handle_upload(update, context)
