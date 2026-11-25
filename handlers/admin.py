@@ -174,18 +174,23 @@ async def a_pickch(update, context, args):
 
 
 def panel_text() -> str:
+    return (
+        "⚙️ <b>ADMIN CONTROL PANEL</b>\n\n"
+        "SELECT AN OPTION TO MANAGE YOUR BOT."
+    )
+
+
+def settings_text() -> str:
     ch, fs, ad = S.get("db_channel"), S.get("fsub_channels"), S.get("autodelete")
     db_txt = f"<b>{html.escape(ch['title'] or '')}</b>" if ch else "❌ not set"
-
     return (
-        "🛠 <b>Admin Panel</b>\n\n"
+        "⚙️ <b>SETTINGS</b>\n\n"
         f"📡 Database channel: {db_txt}\n"
         f"🔔 Force-sub: {'ON' if S.get('fsub_enabled') else 'OFF'} "
         f"({len(fs)} channel{'s' if len(fs) != 1 else ''})\n"
         f"⏱ Auto-delete: {f'{ad} min' if ad else 'off'}\n"
         f"🎬 Delivery: {'Stream 🌐' if S.get('delivery_mode') == 'stream' else 'Forward 📩'}\n"
-        f"🛡 Protect content: {'ON' if S.get('protect') else 'OFF'}\n\n"
-        "📤 <i>Send me any file to get a share link.</i>"
+        f"🛡 Protect content: {'ON' if S.get('protect') else 'OFF'}"
     )
 
 
@@ -354,6 +359,38 @@ async def a_home(update, context, args):
         panel_text(),
         K.main_panel(is_owner(update.effective_user.id)),
     )
+
+
+@action("settings")
+async def a_settings(update, context, args):
+    await show(update, settings_text(), K.settings_panel())
+
+
+@action("users")
+async def a_users(update, context, args):
+    await show(update, "👥 <b>USERS</b>\n\nBAN, UNBAN AND MANAGE ADMINS.",
+               K.users_panel(is_owner(update.effective_user.id)))
+
+
+@action("monet")
+async def a_monet(update, context, args):
+    await show(update, "💰 <b>MONETIZATION</b>\n\nADS AND EARNINGS.",
+               K.monetization_panel(is_owner(update.effective_user.id)))
+
+
+@action("servers")
+async def a_servers(update, context, args):
+    if not is_owner(update.effective_user.id):
+        return
+    await show(update, "🖥️ <b>SERVERS</b>\n\nVPS USAGE AND TRANSFER.", K.servers_panel())
+
+
+@action("close")
+async def a_close(update, context, args):
+    try:
+        await update.callback_query.message.delete()
+    except TelegramError:
+        pass
 
 
 @action("cancel")
