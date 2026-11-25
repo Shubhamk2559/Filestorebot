@@ -46,6 +46,7 @@ ads_col = db["ad_sessions"]      # one-time Mini App ad sessions (auto-expire)
 usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<links opened today>
 ap_channels_col = db["ap_channels"]   # Autoposter targets: _id=chat id, slots, enabled, done
 ap_posts_col = db["ap_posts"]         # Autoposter posts: _id=share-link token, chan=chat id, seq, posted
+ap_batches_col = db["ap_batches"]     # Folder Batch jobs (post type 3): resumable imgbb / Telegraph / file-store work - utils/batch.py
 vps_col = db["vps_usage"]             # _id="YYYY-MM-DD-HH" (IST): hourly VPS samples (cpu, ram, network, streams) - utils/usage.py
 stats_col = db["daily_stats"]         # _id="YYYY-MM-DD" (IST): views, gates, imp, clk, valued, rev, verified, fallback, blocked
 
@@ -113,7 +114,7 @@ class SettingsCache:
         self._data[key] = value
         await settings_col.update_one({"_id": "main"}, {"$set": {key: value}}, upsert=True)
 
-    async def reset(self, keep=("admins", "db_channel", "ads_secret", "bk_last", "imgbb_key", "telegraph_token")):
+    async def reset(self, keep=("admins", "db_channel", "ads_secret", "bk_last", "imgbb_key", "imgbb_keys", "telegraph_token")):
         """Restore defaults but keep admins and the database channel."""
         kept = {k: self._data.get(k) for k in keep}
         fresh = copy.deepcopy(DEFAULTS)
@@ -138,6 +139,8 @@ async def init_db():
     await ads_col.create_index([("uid", 1), ("status", 1)])
     await ap_posts_col.create_index([("chan", 1), ("seq", 1)])
     await ap_posts_col.create_index([("chan", 1), ("posted", 1), ("seq", 1)])
+    await ap_posts_col.create_index("batch_id")
+    await ap_batches_col.create_index([("status", 1), ("next_try", 1)])
     await settings.load()
 
 
@@ -448,6 +451,7 @@ async def ap_set(cid: int, **fields):
 async def ap_remove_channel(cid: int):
     await ap_channels_col.delete_one({"_id": cid})
     await ap_posts_col.delete_many({"chan": cid})
+    await ap_batches_col.delete_many({"chan": cid})
 
 
 async def ap_claim_slot(cid: int, key: str) -> bool:
