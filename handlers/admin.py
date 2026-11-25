@@ -678,10 +678,10 @@ async def a_scap(update, context, args):
 
     await show(
         update,
-        "📝 <b>Start Caption</b>\n"
-        "Send new text · HTML ok · max 1000 chars\n"
-        "Tags: <code>{first_name}</code> <code>{mention}</code>\n\n"
-        f"<b>Current</b>\n{S.get('start_caption')}",
+        "📝 <b>Start Caption</b>\n\n"
+        "Send the new caption (HTML supported, max 1000 characters).\n"
+        "Placeholders: <code>{first_name}</code>, <code>{mention}</code>\n\n"
+        f"<b>Current:</b>\n{S.get('start_caption')}",
         M([
             [B("↩️ Reset to default", "adm:scaprs")],
             [B("❌ Cancel", "adm:cancel")],
@@ -692,7 +692,7 @@ async def a_scap(update, context, args):
 @action("scaprs")
 async def a_scaprs(update, context, args):
     await S.set("start_caption", db.DEFAULT_CAPTION)
-    await show(update, "✅ Reset to default.", K.back())
+    await show(update, "✅ Start caption reset to default.", K.back())
 
 
 @state("scap")
@@ -702,7 +702,7 @@ async def st_scap(update, context):
 
     if not text or len(text) > 1000:
         await msg.reply_text(
-            "⚠️ Text only, max 1000 characters.",
+            "⚠️ Send text up to 1000 characters (formatting included).",
             reply_markup=K.cancel(),
         )
         return
@@ -711,7 +711,7 @@ async def st_scap(update, context):
     context.user_data.pop("state", None)
 
     await msg.reply_text(
-        "✅ Saved. Preview:\n\n" +
+        "✅ Start caption saved. Preview:\n\n" +
         text.replace("{first_name}", "Friend").replace("{mention}", "Friend"),
         reply_markup=K.back(),
     )
@@ -842,15 +842,17 @@ async def a_mode(update, context, args):
     status = (
         "✅ ready"
         if streamer.ready
-        else f"❌ {html.escape(streamer.error or 'off')}"
+        else f"❌ off ({html.escape(streamer.error or 'not started')})"
     )
 
     await show(
         update,
         f"{note}🎬 <b>Delivery Mode</b>\n\n"
-        "📩 <b>Forward</b> · files sent in chat\n"
-        "🌐 <b>Stream</b> · Stream + Download buttons (large files)\n\n"
-        f"Now: <b>{'Stream' if cur == 'stream' else 'Forward'}</b> · Engine: {status}",
+        "Choose what users receive when they open a share link.\n\n"
+        "📩 <b>Forward</b>: files are sent in the chat.\n"
+        "🌐 <b>Stream</b>: users get Stream and Download buttons (supports large files).\n\n"
+        f"Current: <b>{'Stream' if cur == 'stream' else 'Forward'}</b>\n"
+        f"Streaming engine: {status}",
         M([
             [b("forward", "📩 Forward"), b("stream", "🌐 Stream")],
             [B("🔙 Back", "adm:home")],
@@ -927,9 +929,9 @@ async def a_fcap(update, context, args):
             update,
             context,
             "fcap",
-            "✏️ <b>Custom File Caption</b>\n"
-            "Send text · HTML ok · max 1000 chars\n"
-            "Replaces the original caption on every file.",
+            "✏️ <b>Custom File Caption</b>\n\n"
+            "Send the caption (HTML allowed, max 1000 characters). "
+            "It replaces the original caption on every delivered file.",
         )
         return
 
@@ -938,9 +940,9 @@ async def a_fcap(update, context, args):
     await show(
         update,
         f"{note}🏷 <b>File Caption</b>\n\n"
-        f"Custom: {custom or '— none —'}\n"
-        f"Remove original: <b>{'ON' if rem else 'OFF'}</b>\n\n"
-        "<i>Priority: custom → remove original → keep original</i>",
+        f"Custom caption: {custom or '— none —'}\n"
+        f"Remove original caption: {'ON' if rem else 'OFF'}\n\n"
+        "Order: custom caption, then remove original, then keep original.",
         M([
             [
                 B("✏️ Set custom caption", "adm:fcap:set"),
@@ -964,7 +966,7 @@ async def st_fcap(update, context):
 
     if not text or len(text) > 1000:
         await msg.reply_text(
-            "⚠️ Text only, max 1000 characters.",
+            "⚠️ Send text up to 1000 characters.",
             reply_markup=K.cancel(),
         )
         return
@@ -1047,30 +1049,30 @@ def _speed(ms) -> str:
 
 def mongo_text(m: dict, detail: bool = False) -> str:
     if not m["ok"]:
-        return ("🍃 <b>MongoDB</b> · 🔴 Not reachable\n"
+        return ("🍃 <b>MongoDB</b>\n🔴 <b>Not reachable</b>\n"
                 f"<code>{html.escape(m['error'] or 'unknown error')}</code>\n"
-                "Check Atlas: cluster paused or IP blocked.")
+                "Check the cluster in Atlas (it may be paused or the IP is blocked).")
     limit = m["limit_mb"] * 1048576
     pct = min(100.0, m["used"] / limit * 100) if limit else 0
     left = max(0, limit - m["used"])
     bar = "🟩" * round(pct / 10) + "⬜" * (10 - round(pct / 10))
     if pct >= 90:
-        health = "🔴 Almost full"
+        health = "🔴 Almost FULL - delete old data / upgrade now"
     elif pct >= 80:
         health = "🟡 Getting full"
     else:
         health = "🟢 Healthy"
-    t = (f"🍃 <b>MongoDB</b> · {health}\n"
-         f"💾 <b>{_mb(m['used'])}</b> / {m['limit_mb']:g} MB ({pct:.1f}%) · {_mb(left)} free\n"
+    t = (f"🍃 <b>MongoDB</b>\n{health}\n"
+         f"⚡ Ping: {_speed(m['ping_ms'])} · Read: {_speed(m['read_ms'])}\n"
+         f"💾 Used: <b>{_mb(m['used'])}</b> / {m['limit_mb']:g} MB (<b>{pct:.1f}%</b>)\n"
          f"{bar}\n"
-         f"⚡ Ping {_speed(m['ping_ms'])} · Read {_speed(m['read_ms'])}\n"
-         f"📄 {m['objects']} docs · 🗂 {m['collections']} collections")
+         f"🆓 Left: <b>{_mb(left)}</b>\n"
+         f"📄 Documents: {m['objects']} · 🗂 Collections: {m['collections']}")
     if m.get("conn"):
-        c = m["conn"]
-        t += f" · 🔌 {c.get('current')}/{(c.get('current') or 0) + (c.get('available') or 0)}"
+        t += f"\n🔌 Connections: {m['conn'].get('current')} used, {m['conn'].get('available')} free"
     if detail:
-        t += f"\n\n📦 Data {_mb(m['data'])} · Disk {_mb(m['storage'])} · Index {_mb(m['index'])}\n"
-        t += "\n".join(f"• <code>{html.escape(n)}</code> {c} · {_mb(sz)}" for n, c, sz in m.get("cols", []))
+        t += f"\n\n📦 Data {_mb(m['data'])} · Disk {_mb(m['storage'])} · Indexes {_mb(m['index'])}\n"
+        t += "\n".join(f"• <code>{html.escape(n)}</code>: {c} docs · {_mb(sz)}" for n, c, sz in m.get("cols", []))
     return t
 
 
@@ -1082,11 +1084,15 @@ async def a_stats(update, context, args):
     await show(
         update,
         "📊 <b>Statistics</b>\n\n"
-        f"👥 Users <b>{s['users']}</b> · 📁 Files <b>{s['files']}</b> · 🔗 Links <b>{s['links']}</b>\n"
-        f"🚫 Banned <b>{s['banned']}</b> · 💤 Blocked bot <b>{s['blocked']}</b>\n\n"
+        f"👥 Users: <b>{s['users']}</b>\n"
+        f"📁 Files: <b>{s['files']}</b>\n"
+        f"🔗 Links created: <b>{s['links']}</b>\n"
+        f"🚫 Banned: <b>{s['banned']}</b>\n"
+        f"💤 Blocked the bot: <b>{s['blocked']}</b>\n\n"
         + mongo_text(m),
         M([
-            [B("🍃 Details", "adm:mongo"), B("🔄 Refresh", "adm:stats")],
+            [B("🍃 MongoDB details", "adm:mongo")],
+            [B("🔄 Refresh", "adm:stats")],
             [B("🔙 Back", "adm:home")],
         ]),
     )
@@ -1215,78 +1221,70 @@ async def a_ads(update, context, args):
             note = "⚠️ Set the Zone ID first.\n\n"
         else:
             await S.set("ads_enabled", not S.get("ads_enabled"))
-            note = "✅ Saved.\n\n"
+            note = "✅ Updated.\n\n"
     elif a == "pb":
         await S.set("ads_postback", not S.get("ads_postback"))
-        note = "✅ Saved.\n\n"
+        note = "✅ Updated.\n\n"
     elif a == "ab":
         await S.set("ads_block_adblock", not S.get("ads_block_adblock"))
-        note = "✅ Saved.\n\n"
+        note = "✅ Updated.\n\n"
     elif a == "tst":
         await S.set("ads_admin_test", not S.get("ads_admin_test"))
-        note = "✅ Saved.\n\n"
+        note = "✅ Updated.\n\n"
     elif a == "newsec":
         await S.set("ads_secret", "")
         await ads.ensure_secret()
-        note = "🔑 New secret created. Update the Postback URL in Monetag.\n\n"
-    elif a == "setup":
-        pb_url = await ads.postback_url()
-        await show(
-            update,
-            "🔧 <b>Monetag Setup</b>\n\n"
-            "<b>1.</b> SDK zone → Postback URL:\n"
-            f"<code>{html.escape(pb_url)}</code>\n\n"
-            "<b>2.</b> Telegram Mini App URL:\n"
-            f"<code>{html.escape(config.BASE_URL or '— BASE_URL not set —')}</code>",
-            M([[B("🔑 New secret", "adm:ads:newsec")], [B("🔙 Back", "adm:ads")]]),
-        )
-        return
+        note = "🔑 New secret created. Paste the NEW postback URL in Monetag.\n\n"
     elif a == "zone":
         await ask(update, context, "ads_zone",
-                  "📺 <b>Zone ID</b>\n"
-                  "Send your SDK zone ID (digits only).\n"
-                  "Found in your Monetag code: <code>data-zone=\"123456\"</code>")
+                  "📺 <b>Monetag Zone ID</b>\n\nSend your main <b>SDK zone ID</b> (digits only), "
+                  "the number in <code>data-zone=\"123456\"</code> of your Monetag Telegram Mini App code.")
         return
     elif a == "sdk":
         await ask(update, context, "ads_sdk",
-                  "🔗 <b>SDK URL</b>\n"
-                  "Send the <code>src</code> of the Monetag script tag.\n"
-                  f"Now: <code>{html.escape(S.get('ads_sdk_url'))}</code>")
+                  "🔗 <b>SDK script URL</b>\n\nSend the <code>src</code> of the script tag from your Monetag code, "
+                  f"e.g. <code>{html.escape(S.get('ads_sdk_url'))}</code>")
         return
 
     on = S.get("ads_enabled")
     st = await ads.get_stats()
+    pb_url = await ads.postback_url()
     warn = ""
     if not ads.mini_app_ready():
-        warn += "⚠️ BASE_URL must be a public https URL.\n"
+        warn += "⚠️ <b>BASE_URL</b> must be a public https URL, otherwise ads are skipped.\n"
     if not ads.zone():
-        warn += "⚠️ Zone ID not set.\n"
+        warn += "⚠️ Zone ID is not set.\n"
     if on and S.get("ads_postback") and not S.get("ads_last_postback"):
-        warn += "⚠️ No postback yet. Add the URL from 🔧 Setup in Monetag.\n"
+        warn += "⚠️ No postback received yet: paste the Postback URL below in Monetag.\n"
     if not S.get("ads_postback"):
-        warn += "⚠️ Server verify is OFF. Ads can be faked.\n"
-
-    def flag(v):
-        return "✅ ON" if v else "OFF"
+        warn += "⚠️ Server verification is OFF: an ad can be faked from the client. Keep it ON.\n"
 
     await show(
         update,
-        f"{note}📺 <b>Ads · Monetag</b> · {'✅ ON' if on else 'OFF'}\n\n"
-        f"Zone: <code>{html.escape(ads.zone()) or '— not set —'}</code>\n"
-        f"SDK: <code>{html.escape(ads.sdk_url())}</code>\n"
-        f"Server verify: {'✅ ON' if S.get('ads_postback') else '⚠️ OFF'} · last: {_ago(S.get('ads_last_postback'))}\n"
-        f"AdBlock check: {flag(S.get('ads_block_adblock'))}\n"
-        f"Admin test: {flag(S.get('ads_admin_test'))}\n"
-        f"No-fill tries: {S.get('ads_tries')} (max {ads.FALLBACK_DAILY} free fallbacks/user/day)\n\n"
-        f"📈 Verified {st.get('verified', 0)} · Free {st.get('fallback', 0)} · Blocked {st.get('blocked', 0)}"
-        + (f"\n\n{warn.rstrip()}" if warn else ""),
+        f"{note}📺 <b>Ads (Monetag Mini App)</b>\n\n"
+        f"Status: {'ON ✅' if on else 'OFF'}\n"
+        f"Zone ID: <code>{html.escape(ads.zone()) or '— not set —'}</code>\n"
+        f"SDK URL: <code>{html.escape(ads.sdk_url())}</code>\n"
+        f"Server verification (postback): {'ON ✅' if S.get('ads_postback') else 'OFF ⚠️'} "
+        f"· last postback: {_ago(S.get('ads_last_postback'))}\n"
+        f"Test as admin (ads shown to admins too): {'ON ✅' if S.get('ads_admin_test') else 'OFF'}\n"
+        f"AdBlock / DNS blocker check: {'ON ✅' if S.get('ads_block_adblock') else 'OFF'}\n"
+        f"No-fill tries before free files: {S.get('ads_tries')} "
+        f"(max {ads.FALLBACK_DAILY} such fallbacks per user per day)\n\n"
+        f"📈 Ads verified: {st.get('verified', 0)} · Fallback: {st.get('fallback', 0)} · "
+        f"Blocked: {st.get('blocked', 0)}\n\n"
+        f"{warn}\n"
+        "<b>Postback URL</b> (Monetag → your SDK zone → Postback URL):\n"
+        f"<code>{html.escape(pb_url)}</code>\n\n"
+        "Also add this app URL in Monetag → Telegram Mini App:\n"
+        f"<code>{html.escape(config.BASE_URL or '— BASE_URL not set —')}</code>",
         M([
             [B("🔕 Turn OFF" if on else "🔔 Turn ON", "adm:ads:t")],
             [B("✏️ Zone ID", "adm:ads:zone"), B("🔗 SDK URL", "adm:ads:sdk")],
             [B("🛰 Server verify: " + ("ON" if S.get("ads_postback") else "OFF"), "adm:ads:pb")],
             [B("🛡 AdBlock check: " + ("ON" if S.get("ads_block_adblock") else "OFF"), "adm:ads:ab")],
-            [B("🧪 Admin test: " + ("ON" if S.get("ads_admin_test") else "OFF"), "adm:ads:tst")],
-            [B("🔧 Setup URLs", "adm:ads:setup")],
+            [B("🧪 Test as admin: " + ("ON" if S.get("ads_admin_test") else "OFF"), "adm:ads:tst")],
+            [B("🔑 New postback secret", "adm:ads:newsec")],
             [B("🔙 Back", "adm:home")],
         ]),
     )
@@ -1297,7 +1295,7 @@ async def st_ads_zone(update, context):
     msg = update.effective_message
     z = (msg.text or "").strip()
     if not re.fullmatch(r"\d{3,14}", z):
-        await msg.reply_text("⚠️ Digits only.", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ Send the zone ID as digits only.", reply_markup=K.cancel())
         return
     await S.set("ads_zone", z)
     context.user_data.pop("state", None)

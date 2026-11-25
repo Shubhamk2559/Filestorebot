@@ -151,7 +151,7 @@ async def a_aptype(update, context, args):
                         if t == "pair" else
                         "📂 <b>Folder Batch</b>: a text with “Uploaded” closes a folder; every file above it = one folder.\n"
                         "Photos → imgbb → one Telegraph link · other files → one file-store link · "
-                        "every captioned photo = its own post.\n"
+                        "every captioned photo = its own post (no captioned photo → one post with the fixed thumbnail).\n"
                         "Caption tags <code>{Preview Image}</code> <code>{Video Link}</code> <code>{Post Number}</code> work "
                         "only in this type. Posts of one folder are 30+ days apart.\n"
                         "Posts you already created keep their own type.\n\n"
@@ -274,7 +274,7 @@ async def show_cb(update, cid: int, note: str = ""):
                f"📝 Fixed caption:\n{tpl or '— not set (each post uses its own caption) —'}\n\n"
                f"🔘 Button: <b>{html.escape(btn)}</b>\n\n"
                f"🖼+🎬 <b>Image + Video posts</b>\n"
-               f"🖼 Fixed thumbnail: <b>{'set ✅' if ch.get('fthumb') else 'not set ⚠️ (required for Image + Video posts)'}</b>\n"
+               f"🖼 Fixed thumbnail: <b>{'set ✅' if ch.get('fthumb') else 'not set ⚠️ (needed for Image + Video posts and for Folder Batch folders without a captioned photo)'}</b>\n"
                f"🔘 Buttons: <b>{html.escape(ch.get('btn_img') or AP.DEFAULT_BTN_IMG)}</b> · "
                f"<b>{html.escape(ch.get('btn_vid') or AP.DEFAULT_BTN_VID)}</b>\n\n"
                f"🌐 imgbb API keys: <b>{len(BT.keys()) or 'none (preview button opens the bot link)'}</b>\n"
@@ -885,7 +885,9 @@ async def _run_range_batch(bot, src, first: int, last: int, cid: int, by: int, s
         except Exception:
             pass
     folders, left = BT.scan_folders(entries)
-    n_posts = sum(len(BT.plan_folder(f["items"])[2]) for f in folders)
+    n_posts = sum(max(1, len(BT.plan_folder(f["items"])[2])) for f in folders if BT.plan_folder(f["items"])[0])
+    plain = sum(1 for f in folders if BT.plan_folder(f["items"])[0] and not BT.plan_folder(f["items"])[2])
+    fixed_ok = bool((await db.ap_get_channel(cid) or {}).get("fthumb"))
     queued = await BT.queue_folders(cid, folders, by)
     no_photo = len(folders) - queued
     if not queued:
@@ -895,6 +897,10 @@ async def _run_range_batch(bot, src, first: int, last: int, cid: int, by: int, s
         text = (f"✅ <b>{queued} folder(s)</b> queued → <b>{n_posts} post(s)</b> will be created.\n"
                 "The bot prepares them slowly in the background (imgbb cooldown) and the posts appear in 📚 All Posts. "
                 "If imgbb keys run out it pauses and continues by itself.")
+    if plain:
+        text += (f"\n🖼 {plain} folder(s) have no captioned photo → one post each with the fixed thumbnail"
+                 + ("." if fixed_ok else " ⚠️ <b>Fixed thumbnail is not set</b> (🎨 Caption & Button → Fixed Thumbnail), "
+                    "those posts cannot go out until you set it."))
     if no_photo and queued:
         text += f"\n⏭ Folders without any photo (skipped): {no_photo}"
     if left:
