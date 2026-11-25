@@ -98,15 +98,14 @@ async def show_channel(update, cid: int, note: str = ""):
     batch_line = ""
     if ch.get("ptype") == "batch":
         todo, done = await BT.counts(cid)
-        batch_line = (f"\n📂 Folders: {done} ready" + (f" · ⏳ {todo} being prepared in the background" if todo else "")
-                      + f"\n🔢 Last post number: <b>{ch.get('post_no', 0)}</b>")
+        batch_line = (f"\n📂 Folders: <b>{done}</b> ready" + (f" · <b>{todo}</b> preparing" if todo else "")
+                      + f"\n🔢 Last post no.: <b>{ch.get('post_no', 0)}</b>")
     text = (f"{note}📺 <b>{html.escape(ch['title'])}</b>\n\n"
-            f"Autoposter: {'ON ✅' if on else 'OFF ⏸'}\n"
-            f"⏰ Timings (IST): {AP.fmt_slots(ch.get('slots', []))}\n"
-            f"🧩 Post type: <b>{_type_name(ch)}</b>\n"
-            f"🔀 Order: shuffled · Cycle <b>{(ch.get('queue_state') or {}).get('cycle', 0)}</b> · "
-            f"{'🔁 loop' if loop else '➡️ one pass'}\n"
-            f"📚 Posts: <b>{total}</b> · ✅ posted {posted} · ⏳ pending {total - posted}{batch_line}")
+            f"▫️ Status: <b>{'ON ✅' if on else 'OFF ⏸'}</b>\n"
+            f"▫️ Timings (IST): <b>{AP.fmt_slots(ch.get('slots', []))}</b>\n"
+            f"▫️ Type: <b>{_type_name(ch)}</b>\n"
+            f"▫️ Mode: <b>{'🔁 loop' if loop else '➡️ one pass'}</b> · cycle <b>{(ch.get('queue_state') or {}).get('cycle', 0)}</b>\n"
+            f"▫️ Posts: <b>{total}</b> total · <b>{posted}</b> posted · <b>{total - posted}</b> pending{batch_line}")
     await show(update, text, M([
         [B("⏰ Timings", f"adm:aptm:{cid}"), B(f"📚 All Posts ({total})", f"adm:apall:{cid}:0")],
         [B("➕ Create Post", f"adm:apnew:{cid}"), B("🎨 Caption & Button", f"adm:apcb:{cid}")],
@@ -144,33 +143,16 @@ async def a_aptype(update, context, args):
     ch = await db.ap_get_channel(cid) or {}
     t = ch.get("ptype")
     await show_channel(update, cid,
-                       ("🖼+🎬 <b>Image + Video</b>: new posts are made from image 1, video 1, image 2, video 2 …\n"
-                        "Image link = free preview (no ad) · Video link = ad gate.\n"
-                        "Posted with the fixed thumbnail + fixed caption (🎨 Caption & Button).\n"
-                        "Posts you already created keep their own type.\n\n"
+                       ("🖼+🎬 <b>Image + Video</b>\n"
+                        "Files in order: image, video, image, video…\n"
+                        "Each pair = 1 post · image = free preview · video = after ad.\n\n"
                         if t == "pair" else
-                        "📂 <b>Folder Batch</b>: a text with “Uploaded” closes a folder; every file above it = one folder.\n"
-                        "Photos → imgbb → one Telegraph link · other files → one file-store link · "
-                        "every captioned photo = its own post (no captioned photo → one post with the fixed thumbnail).\n"
-                        "Caption tags <code>{Preview Image}</code> <code>{Video Link}</code> <code>{Post Number}</code> work "
-                        "only in this type. Posts of one folder are 30+ days apart.\n"
-                        "Posts you already created keep their own type.\n\n"
+                        "📂 <b>Folder Batch</b>\n"
+                        "Text with “Uploaded” closes a folder · files above it = 1 folder.\n"
+                        "Photos → Telegraph link · other files → file link.\n\n"
                         if t == "batch" else
-                        "🎞 <b>Classic</b>: captioned file = thumbnail, captionless files below it = the post's files.\n"
-                        "Posts you already created keep their own type.\n\n"))
-
-
-@action("apreset")
-async def a_apreset(update, context, args):
-    await a_apresh(update, context, args)          # old "mark all pending" button = a fresh reshuffle
-
-
-# ===================================================================== shuffled queue
-def _ago(ts) -> str:
-    if not ts:
-        return "never"
-    mins = int((time.time() - ts) // 60)
-    return "just now" if mins < 1 else f"{mins} min ago" if mins < 60 else f"{mins // 60} h ago" if mins < 1440 else f"{mins // 1440} d ago"
+                        "🎞 <b>Classic</b>\n"
+                        "Captioned file = thumbnail · captionless files below = post files.\n\n"))
 
 
 async def show_queue(update, cid: int, note: str = ""):
@@ -189,14 +171,12 @@ async def show_queue(update, cid: int, note: str = ""):
         lines = [f"• #{p['seq']} {html.escape(p['title'][:26])} — in {max(1, int((p['not_before'] - now) // 86400))} d"
                  for p in wait[:8]]
         await show(update,
-                   f"{note}🗂 <b>Queue</b> — {html.escape(ch['title'])} (📂 Folder Batch)\n\n"
-                   f"✅ Posted: <b>{posted}</b> · 🟢 Can go out now: <b>{len(ready)}</b> · "
-                   f"🕓 Waiting for the gap: <b>{len(wait)}</b>\n"
-                   f"📂 Folders still being prepared: <b>{todo}</b>\n"
-                   f"🔢 Last post number: <b>{ch.get('post_no', 0)}</b>\n"
-                   f"📆 Same folder: min <b>{gap}</b> days (+ random 0-{BT.GAP_JITTER_DAYS}) · any two posts: min <b>{min_h:g}</b> h · "
-                   f"max <b>1</b> post per time\n"
-                   f"Last posted: <b>{_ago((ch.get('queue_state') or {}).get('last_posted_at'))}</b>\n\n"
+                   f"{note}🗂 <b>Queue</b> — {html.escape(ch['title'])}\n\n"
+                   f"▫️ Posted: <b>{posted}</b> · Ready: <b>{len(ready)}</b> · Waiting: <b>{len(wait)}</b>\n"
+                   f"▫️ Preparing: <b>{todo}</b> folders\n"
+                   f"▫️ Last post no.: <b>{ch.get('post_no', 0)}</b>\n"
+                   f"▫️ Gap: <b>{gap}</b> d (+0-{BT.GAP_JITTER_DAYS}) · <b>{min_h:g}</b> h between posts\n"
+                   f"▫️ Last posted: <b>{_ago((ch.get('queue_state') or {}).get('last_posted_at'))}</b>\n\n"
                    f"<b>Waiting</b>\n" + ("\n".join(lines) if lines else "<i>none</i>"),
                    M([[B("🔄 Refresh", f"adm:apq:{cid}")], [B("🔙 Back", f"adm:apc:{cid}")]]))
         return
@@ -209,13 +189,12 @@ async def show_queue(update, cid: int, note: str = ""):
     when = (f"{nxt[0].strftime('%H:%M')} IST ×{nxt[1]['n']}" if nxt else "no timing set")
     await show(update,
                f"{note}🗂 <b>Queue</b> — {html.escape(ch['title'])}\n\n"
-               f"⏳ Remaining: <b>{total - posted}</b> · ✅ Posted: <b>{posted}</b>\n"
-               f"🔄 Cycle: <b>{qs.get('cycle', 0)}</b> · Cursor: <b>{cursor}/{len(queue)}</b>\n"
-               f"Mode: <b>{'🔁 loop' if ch.get('loop', True) else '➡️ one pass'}</b>\n"
-               f"Status: <b>{html.escape(str(qs.get('shuffle_status', 'idle')))}</b>\n"
-               f"Last posted: <b>{_ago(qs.get('last_posted_at'))}</b>\n"
-               f"Next time: <b>{when}</b>\n\n"
-               f"<b>Up next</b> (▶️ = goes out at the next time)\n"
+               f"▫️ Remaining: <b>{total - posted}</b> · Posted: <b>{posted}</b>\n"
+               f"▫️ Cycle: <b>{qs.get('cycle', 0)}</b> · Cursor: <b>{cursor}/{len(queue)}</b>\n"
+               f"▫️ Mode: <b>{'🔁 loop' if ch.get('loop', True) else '➡️ one pass'}</b>\n"
+               f"▫️ Last posted: <b>{_ago(qs.get('last_posted_at'))}</b>\n"
+               f"▫️ Next: <b>{when}</b>\n\n"
+               f"<b>Up next</b> (▶️ = next slot)\n"
                + ("\n".join(lines) if lines else "<i>empty</i>"),
                M([[B("🔀 Reshuffle", f"adm:apresh:{cid}"), B("🔄 Refresh", f"adm:apq:{cid}")],
                   [B("🔙 Back", f"adm:apc:{cid}")]]))
@@ -271,21 +250,17 @@ async def show_cb(update, cid: int, note: str = ""):
     btn = ch.get("btn") or AP.DEFAULT_BTN
     await show(update,
                f"{note}🎨 <b>Caption &amp; Button</b> — {html.escape(ch['title'])}\n\n"
-               f"📝 Fixed caption:\n{tpl or '— not set (each post uses its own caption) —'}\n\n"
-               f"🔘 Button: <b>{html.escape(btn)}</b>\n\n"
-               f"🖼+🎬 <b>Image + Video posts</b>\n"
-               f"🖼 Fixed thumbnail: <b>{'set ✅' if ch.get('fthumb') else 'not set ⚠️ (needed for Image + Video posts and for Folder Batch folders without a captioned photo)'}</b>\n"
+               f"📝 Caption: {tpl or '<i>not set</i>'}\n"
+               f"🔘 Button: <b>{html.escape(btn)}</b>\n"
+               f"🖼 Thumbnail: <b>{'set ✅' if ch.get('fthumb') else 'not set ⚠️'}</b>\n\n"
+               f"<b>Image + Video</b>\n"
                f"🔘 Buttons: <b>{html.escape(ch.get('btn_img') or AP.DEFAULT_BTN_IMG)}</b> · "
                f"<b>{html.escape(ch.get('btn_vid') or AP.DEFAULT_BTN_VID)}</b>\n\n"
-               f"🌐 imgbb API keys: <b>{len(BT.keys()) or 'none (preview button opens the bot link)'}</b>\n"
-               "<i>(global - the same keys for every channel)</i>\n\n"
-               f"📂 <b>Folder Batch</b> (only this post type)\n"
+               f"<b>Folder Batch</b>\n"
+               f"🌐 imgbb keys: <b>{len(BT.keys()) or 'none'}</b>\n"
                f"📰 Telegraph title: <code>{html.escape(ch.get('tg_title') or BT.DEFAULT_TG_TITLE)}</code>\n"
-               f"🔢 Last post number: <b>{ch.get('post_no', 0)}</b> (next post = +1)\n"
-               "Tags for the caption (replaced only in a Folder Batch channel, otherwise shown as typed):\n"
-               "<code>{Preview Image}</code> Telegraph link · <code>{Video Link}</code> video link · "
-               "<code>{Post Number}</code> number\n\n"
-               "This one fixed caption is used on every post of this channel (also the ones already created).",
+               f"🔢 Last post no.: <b>{ch.get('post_no', 0)}</b>\n"
+               "🏷 Tags: <code>{Preview Image}</code> <code>{Video Link}</code> <code>{Post Number}</code>",
                M([[B("📝 Edit Caption", f"adm:apcap:{cid}"), B("🔘 Edit Button", f"adm:apbtn:{cid}")],
                   [B("🖼 Fixed Thumbnail", f"adm:apthumb:{cid}"), B("🔘 Pair Buttons", f"adm:appbtn:{cid}")],
                   [B("🌐 imgbb API Keys", f"adm:apimg:{cid}"), B("📰 Telegraph Title", f"adm:aptgt:{cid}")],
@@ -743,30 +718,26 @@ async def a_apnew(update, context, args):
     ch = await db.ap_get_channel(cid) or {}
     if ch.get("ptype") == "batch":
         await show(update,
-                   "➕ <b>Create Post</b>\n\n📂 <b>Folder Batch</b> type\n\n"
-                   "In the source channel every folder ends with a text containing “Uploaded” (e.g. <i>Wedding Uploaded ✅</i>). "
-                   "All files above it = one folder.\n"
-                   "Send the first and the last message link of the range - the bot finds the folders and prepares them "
-                   "slowly in the background (imgbb cooldown, Telegraph, video link). You can keep using the bot.\n"
-                   + ("" if BT.enabled() else "\n⚠️ <b>No imgbb key yet</b> - add one first (🎨 Caption & Button → imgbb API Keys).\n")
-                   + ("" if ch.get("cap_tpl") else "\n💡 No fixed caption set yet (🎨 Caption & Button)."),
+                   "➕ <b>Create Post</b> — 📂 Folder Batch\n\n"
+                   "1. Each folder ends with a text containing “Uploaded”.\n"
+                   "2. Send first + last message link of the range.\n"
+                   "3. Bot prepares everything in the background."
+                   + ("" if BT.enabled() else "\n\n⚠️ Add an imgbb key first (Caption & Button → imgbb API Keys).")
+                   + ("" if ch.get("cap_tpl") else "\n\n💡 Fixed caption not set."),
                    M([[B("🔢 Range: first + last message", f"adm:aprange:{cid}")],
                       [B("🔙 Back", f"adm:apc:{cid}")]]))
         return
     if ch.get("ptype") == "pair":
-        how = ("🖼+🎬 <b>Image + Video</b> type\n\n"
-               "Order: image 1, video 1, image 2, video 2 … Each (image + video) = one post with two links:\n"
-               "🖼 image = free preview (no ad) · 🎬 video = opens only after the ad.\n"
-               "The post is shown with the channel's <b>fixed thumbnail + fixed caption</b> (🎨 Caption & Button), "
-               "never with the post's own image.\n"
-               + ("" if ch.get("fthumb") else "\n⚠️ <b>Fixed thumbnail is not set yet</b> - set it first, otherwise these posts cannot be sent.\n"))
+        how = ("🖼+🎬 <b>Image + Video</b>\n\n"
+               "Files in order: image, video, image, video…\n"
+               "Each pair = 1 post (image free · video after ad).\n"
+               + ("" if ch.get("fthumb") else "\n⚠️ Set the Fixed Thumbnail first.\n"))
     else:
-        how = ("🎞 <b>Classic</b> type\n\n"
-               "A file <b>with a caption</b> = the post's thumbnail. All files <b>without a caption</b> right below it "
-               "are that post's files (one share link). The next captioned file starts the next post.\n"
-               "📷 A captionless <b>album</b> below a captioned file goes into that post's link.\n")
+        how = ("🎞 <b>Classic</b>\n\n"
+               "Captioned file = thumbnail.\n"
+               "Captionless files below it = post files.\n")
     await show(update,
-               f"➕ <b>Create Post</b>\n\n{how}\nChoose how:",
+               f"➕ <b>Create Post</b> — {how}",
                M([[B("🔢 Range: first + last message", f"adm:aprange:{cid}")],
                   [B("📥 Send / forward files, then Done", f"adm:apcollect:{cid}")],
                   [B("🔙 Back", f"adm:apc:{cid}")]]))
