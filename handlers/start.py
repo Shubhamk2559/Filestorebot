@@ -58,7 +58,7 @@ async def handle_token(context, user, chat_id: int, token: str):
     else:                  # link lookup and channel-membership check run in parallel (faster first response)
         link, missing = await asyncio.gather(db.get_link(token), get_missing(context.bot, user.id))
     if not link:
-        await call(context.bot.send_message, chat_id, "❌ This link is invalid or has been revoked.")
+        await call(context.bot.send_message, chat_id, "❌ Link invalid or expired.")
         return
     if missing:
         await send_gate(context, user, chat_id, token, missing)
@@ -121,7 +121,7 @@ async def check_callback(update, context):
         pass
     if not token:
         await call(context.bot.send_message, q.message.chat_id,
-                   f"✅ Verified! Now open a file link to receive your files.\n\n📊 Daily limit: {db.limit_value()} links per user per day (each link gives all its files).")
+                   f"✅ Verified! Open a file link to get your files.\n📊 Limit: {db.limit_value()} links/day")
         return
     link = await link_task
     if not link:
@@ -168,8 +168,8 @@ def _caption_override():
 
 async def _limit_reached(bot, chat_id: int):
     await call(bot.send_message, chat_id,
-               f"🚫 <b>Daily limit reached</b>\n\nYou can open only <b>{db.limit_value()}</b> links per day. "
-               "Please come back tomorrow (resets at 12:00 AM IST).", parse_mode=ParseMode.HTML)
+               f"🚫 <b>Daily limit reached</b> ({db.limit_value()} links)\n"
+               "Resets at 12:00 AM IST.", parse_mode=ParseMode.HTML)
 
 
 async def request_access(bot, chat_id: int, link: dict):
@@ -179,7 +179,7 @@ async def request_access(bot, chat_id: int, link: dict):
         wait = COOLDOWN_SECONDS - (time.monotonic() - _last_open.get(chat_id, 0.0))
         if wait > 0:
             await call(bot.send_message, chat_id,
-                       f"⏳ Please wait <b>{int(wait) + 1}</b> second(s) before opening the next link.",
+                       f"⏳ Wait <b>{int(wait) + 1}s</b> before the next link.",
                        parse_mode=ParseMode.HTML)
             return
         _last_open[chat_id] = time.monotonic()
@@ -215,9 +215,9 @@ async def deliver(bot, chat_id: int, link: dict):
         used = max(0, used - 1)
     _last_open[chat_id] = time.monotonic()             # cooldown starts after delivery finishes
 
-    text = f"📊 <b>Daily limit:</b> {used}/{limit} links used today · {max(0, limit - used)} left"
+    text = f"📊 Links today: <b>{used}/{limit}</b> · {max(0, limit - used)} left"
     if used >= limit:
-        text += "\n\n🚫 Limit reached. Come back tomorrow (resets at 12:00 AM IST)."
+        text += "\n🚫 Limit reached. Resets at 12:00 AM IST."
     await call(bot.send_message, chat_id, text, parse_mode=ParseMode.HTML)
 
 
@@ -280,14 +280,13 @@ async def deliver_forward(bot, chat_id: int, link: dict, channel: dict) -> int:
         try:
             notice = await call(
                 bot.send_message, chat_id,
-                f"⏳ These files will be deleted in <b>{minutes} minute{'s' if minutes != 1 else ''}</b>. "
-                "Please save them before then.", parse_mode=ParseMode.HTML)
+                f"⏳ Files auto-delete in <b>{minutes} min</b>. Save them now.", parse_mode=ParseMode.HTML)
             sent.append(notice.message_id)
         except TelegramError:
             pass
         await db.schedule_delete(chat_id, sent, minutes)
     if skipped:
-        await call(bot.send_message, chat_id, f"ℹ️ {skipped} file(s) are no longer available.")
+        await call(bot.send_message, chat_id, f"ℹ️ {skipped} file(s) unavailable.")
     return files
 
 

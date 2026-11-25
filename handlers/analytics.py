@@ -46,6 +46,12 @@ def _m(x) -> str:
     return f"${x / 1000:.1f}k"
 
 
+def _m4(x) -> str:
+    """Money with extra precision for tiny per-view values ($0.0023)."""
+    x = float(x or 0)
+    return f"${x:.4f}" if 0 < x < 0.01 else _m(x)
+
+
 def _table(rows, widths) -> str:
     out = []
     for r in rows:
@@ -160,26 +166,24 @@ async def _summary(update):
 
     imp30, rev30 = _sum(docs, d30, "imp"), _sum(docs, d30, "rev")
     ecpm = f"{_m(rev30 / imp30 * 1000)}" if imp30 else "—"
-    per_view = f"{_m(rev30 / _sum(docs, d30, 'views'))}" if _sum(docs, d30, "views") else "—"
+    per_view = f"{_m4(rev30 / _sum(docs, d30, 'views'))}" if _sum(docs, d30, "views") else "—"
     since_txt = min(all_docs) if all_docs else "not yet"
 
     note = ""
     if not ads.zone() or not ads.mini_app_ready():
-        note = "\n⚠️ Ads are not configured, so there are no earnings to count."
+        note = "\n⚠️ Ads not configured."
     elif tot["imp"] and not tot["rev"]:
-        note = ("\n⚠️ Monetag sends no price yet. Make sure the Postback URL in Monetag is the one "
-                "shown in 📺 Ads (it contains <code>estimated_price</code>).")
+        note = "\n⚠️ No price from Monetag. Use the Postback URL from 📺 Ads → Setup."
     elif not tot["imp"]:
-        note = "\nℹ️ No ad postbacks received yet."
+        note = "\nℹ️ No postbacks yet."
 
     await show(
         update,
-        "📈 <b>Earnings &amp; Analytics</b>\n"
-        "<i>Days change at 12:00 AM IST</i>\n\n"
+        "📈 <b>Earnings</b> · <i>IST days</i>\n"
         + _table(rows, [10, 7, 7, 7, 7]) +
-        f"\n🎯 eCPM (30d): <b>{ecpm}</b> per 1000 ads · per view: <b>{per_view}</b>\n"
-        f"🕒 Earnings &amp; ads counted since: <b>{since_txt}</b>\n"
-        "💡 Earnings are Monetag's estimate; the final payout is in your Monetag dashboard."
+        f"\n🎯 eCPM (30d) <b>{ecpm}</b> · Per view <b>{per_view}</b>\n"
+        f"🕒 Tracked since {since_txt}\n"
+        "<i>Estimate only. Final payout is in Monetag.</i>"
         + note,
         _kb(),
     )
@@ -195,7 +199,7 @@ async def _daily(update):
         x = docs.get(str(d), {})
         rows.append([d.strftime("%d %b"), _m(x.get("rev")), _n(x.get("views")), _n(x.get("imp")),
                      _n(users.get(str(d), 0))])
-    await show(update, "📅 <b>Last 14 days</b>\n\n" + _table(rows, [7, 8, 7, 7, 7]), _kb("d"))
+    await show(update, "📅 <b>Last 14 days</b>\n" + _table(rows, [7, 8, 7, 7, 7]), _kb("d"))
 
 
 async def _monthly(update):
@@ -221,13 +225,13 @@ async def _monthly(update):
         a = agg.get(mo, {})
         label = dt.date.fromisoformat(mo + "-01").strftime("%b %y")
         rows.append([label, _m(a.get("rev")), _n(a.get("views")), _n(a.get("imp")), _n(users.get(mo, 0))])
-    await show(update, "🗓 <b>Last 12 months</b>\n\n" + _table(rows, [7, 8, 7, 7, 7]), _kb("m"))
+    await show(update, "🗓 <b>Last 12 months</b>\n" + _table(rows, [7, 8, 7, 7, 7]), _kb("m"))
 
 
 async def _top(update):
     top = await db.links_col.find({"views": {"$gt": 0}}).sort("views", -1).limit(10).to_list(10)
     if not top:
-        text = "🏆 <b>Top links</b>\n\nNo link has been opened yet."
+        text = "🏆 <b>Top links</b>\n\nNo link opened yet."
     else:
         lines = [f"{i}. {html.escape((l.get('label') or 'Link')[:30])} - <b>{_n(l.get('views'))}</b> views"
                  for i, l in enumerate(top, 1)]
