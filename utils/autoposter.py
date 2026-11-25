@@ -355,7 +355,13 @@ async def _send_batch(bot, chat_id: int, channel: dict, post: dict):
     {Post Number} are replaced ONLY when the channel's type is Folder Batch (otherwise the text goes out as written).
     The post number is taken now, at posting time: last number + 1. It is saved only after Telegram accepted the
     post, and the whole step is serialised per channel -> never a repeat, never a gap, a failed send reuses it."""
-    thumb = await db.thumb_msg_id(db.make_code(post["thumb_token"], 0))
+    if post.get("fixed_thumb"):                # folder without a captioned photo -> the channel's fixed thumbnail
+        ftok = (await db.ap_get_channel(chat_id) or {}).get("fthumb")
+        if not ftok:
+            return "fixed thumbnail not set (Caption & Button -> Fixed Thumbnail)"
+        thumb = await db.thumb_msg_id(db.make_code(ftok, 0))
+    else:
+        thumb = await db.thumb_msg_id(db.make_code(post["thumb_token"], 0))
     if not thumb:
         return "thumbnail not found in the Database Channel"
     async with _numlocks.setdefault(chat_id, asyncio.Lock()):

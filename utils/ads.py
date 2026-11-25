@@ -136,9 +136,9 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
         return False   # admins skip ads (turn on "Test as admin" in Panel -> Ads to see the gate yourself)
     if not zone() or not mini_app_ready():
         await notify_owner(bot, "ads_cfg",
-                           "⚠️ Ads are ON but not set up: "
-                           f"{'Zone ID missing' if not zone() else 'BASE_URL is not public https'}.\n"
-                           "Files go out WITHOUT ads. Fix in Panel → Ads.", every=300)
+                           "⚠️ Ads are ON but not configured: "
+                           f"{'Zone ID is missing' if not zone() else 'BASE_URL is not a public https URL'}. "
+                           "Files are being delivered WITHOUT ads until you fix it in Panel → Ads.", every=300)
         return False
 
     # one open gate per user: close the previous one
@@ -161,9 +161,9 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
     try:
         msg = await call(
             bot.send_message, chat_id,
-            "🎬 <b>Watch a short ad to get your files</b>\n"
-            "They arrive here right after the ad.\n\n"
-            "⚠️ Turn off ad blocker / Private DNS first.",
+            "🎬 <b>Watch a short ad to unlock your files</b>\n\n"
+            "Tap the button below, watch the ad till the end, and your files arrive here automatically.\n\n"
+            "⚠️ Please turn off any <b>ad blocker / ad-blocking DNS / Private DNS</b> first.",
             reply_markup=M([[B("🎬 Watch Ad & Get Files",
                                web_app=WebAppInfo(url=f"{config.BASE_URL}/ad?s={sid}"))]]),
             parse_mode=ParseMode.HTML)
@@ -172,8 +172,8 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
     except TelegramError as e:
         log.warning("Ad gate could not be sent: %s", e)
         await notify_owner(bot, "ads_send",
-                           f"⚠️ Ad gate failed; files sent without ad.\nReason: {e}\n"
-                           f"Mini App URL: {config.BASE_URL}/ad (must be public https)", every=300)
+                           f"⚠️ Ad gate could not be sent, so files were delivered without an ad.\nReason: {e}\n"
+                           f"Mini App URL used: {config.BASE_URL}/ad  (must be a public https URL)", every=300)
         await db.ads_col.update_one({"_id": sid}, {"$set": {"status": "expired"}})
         return False  # can't show the gate (user blocked bot / Telegram error) -> normal delivery path decides
     return True

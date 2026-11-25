@@ -91,10 +91,11 @@ def scan_folders(entries: list):
 
 
 def plan_folder(items: list):
-    """(photos, files, thumbs) of a folder. thumbs = captioned photos, else the first photo."""
+    """(photos, files, thumbs) of a folder. thumbs = the captioned photos (each = its own post).
+    No captioned photo -> thumbs is empty and ONE post with the channel's fixed thumbnail is made."""
     photos = [i for i in items if i["kind"] == "photo"]
     files = [i for i in items if i["kind"] != "photo"]
-    thumbs = [p for p in photos if p["cap"].strip()] or photos[:1]
+    thumbs = [p for p in photos if p["cap"].strip()]
     return photos, files, thumbs
 
 
@@ -289,6 +290,13 @@ async def _process(bot, b: dict):
             await db.ap_add_post(cid, tok, tmap[str(t["mid"])], seq, title, t["cap_html"], "photo",
                                  len(files), by, ptype="batch", batch_id=bid, batch_name=b["name"],
                                  tg_url=tg, vtoken=vtoken or "", not_before=0)
+            new.append(tok)
+        if not thumbs:                         # no captioned photo -> one post with the fixed thumbnail
+            seq += 1
+            tok = db.new_token()
+            await db.ap_add_post(cid, tok, None, seq, (b["name"] or "Folder")[:40], "", "photo",
+                                 len(files), by, ptype="batch", batch_id=bid, batch_name=b["name"],
+                                 tg_url=tg, vtoken=vtoken or "", not_before=0, fixed_thumb=True)
             new.append(tok)
         await db.ap_enqueue_new(cid, new)
         await _set(bid, posts_made=True)
