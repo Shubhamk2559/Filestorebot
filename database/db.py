@@ -62,8 +62,7 @@ CODE_TAIL_RE = re.compile(r"\s*<code>FSB:[A-Za-z0-9_-]{6,}:\d+</code>\s*$")
 
 DEFAULT_CAPTION = (
     "👋 Hello {mention}!\n\n"
-    "Please join all the channels below to access your files,\n"
-    "then tap <b>Verify</b>."
+    "Join the channels below, then tap <b>Verify</b>."
 )
 
 DEFAULTS = {
