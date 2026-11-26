@@ -30,7 +30,7 @@ from utils.backup import backup_loop
 from utils import padding
 from utils import chats as _chats
 from utils.links import register_bot
-from utils.streamer import streamer
+from utils.mtproto import mtproto
 from utils.web import start_web_server
 from utils.scheduler import autodelete_loop
 from utils.autoposter import autopost_loop
@@ -44,8 +44,8 @@ log = logging.getLogger("bot")
 
 async def post_init(app):
     await db.init_db()                                   # connect, indexes, load cached settings
-    app.bot_data["health"] = await start_web_server(config.PORT, app.bot)   # /health + /dl/<token>/<id> streaming
-    await streamer.start()                               # MTProto engine (needs API_ID, API_HASH, BASE_URL)
+    app.bot_data["health"] = await start_web_server(config.PORT, app.bot)   # /health + /<token> redirect + ads Mini App
+    await mtproto.start()                                # optional MTProto session (Autoposter range / preview) - needs API_ID, API_HASH
     app.bot_data["gc"] = asyncio.create_task(autodelete_loop(app.bot))
     app.bot_data["ap"] = asyncio.create_task(autopost_loop(app.bot))     # Autoposter scheduler
     app.bot_data["bt"] = asyncio.create_task(batch_loop(app.bot))        # Vault Pack worker (imgbb / Telegraph, resumable)
@@ -53,15 +53,15 @@ async def post_init(app):
     app.bot_data["us"] = asyncio.create_task(usage_loop())              # VPS usage sampler (CPU / RAM / bandwidth)
     app.bot_data["sup"] = asyncio.create_task(support.runtime.boot(app.bot))   # reconnect the Support Bot
     app.bot_data["reg"] = asyncio.create_task(register_bot(app.bot.username))   # links -> this bot (Cloudflare Worker)
-    log.info("Bot @%s started (web on :%s, streaming %s)", app.bot.username, config.PORT,
-             "ON" if streamer.ready else f"OFF ({streamer.error})")
+    log.info("Bot @%s started (web on :%s, MTProto %s)", app.bot.username, config.PORT,
+             "ON" if mtproto.ready else f"OFF ({mtproto.error})")
     if not config.BASE_URL.startswith("https://"):
-        log.warning("BASE_URL is not a public https URL -> Monetag ads (Mini App) and Stream/Download links will not work.")
+        log.warning("BASE_URL is not a public https URL -> Monetag ads (Mini App) and web links will not work.")
 
 
 async def post_shutdown(app):
     await support.runtime.stop()
-    await streamer.stop()
+    await mtproto.stop()
     from utils.transfer import session as _tr_session
     await _tr_session.stop()
     for key in ("gc", "ap", "bt", "bk", "us", "sup"):

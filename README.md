@@ -13,14 +13,14 @@ handlers/upload.py  admin uploads, batch mode, link creation
 handlers/broadcast.py  broadcast with progress + flood control
 handlers/usage.py   VPS Usage + Contabo plan advice screens (owner only)
 utils/usage.py      CPU/RAM/bandwidth sampler, hourly stats in MongoDB, plan recommender
-utils/              helpers, keyboards, membership check, scheduler, web server (/health, /dl, /ad)
+utils/              helpers, keyboards, membership check, scheduler, web server (/health, /ad, /<token>)
 ```
 
 ## 1. Get the credentials
 | Variable | Where |
 |---|---|
 | `BOT_TOKEN` | Telegram **@BotFather** -> /newbot |
-| `API_ID`, `API_HASH` | https://my.telegram.org -> API development tools (optional for this PTB build) |
+| `API_ID`, `API_HASH` | https://my.telegram.org -> API development tools (optional: only for Autoposter Range + preview image) |
 | `MONGO_URI` | MongoDB Atlas free cluster -> Connect -> Drivers (allow your host IP / 0.0.0.0/0) |
 | `OWNER_ID` | Message **@userinfobot** to see your numeric ID |
 
@@ -34,12 +34,12 @@ bash deploy.sh                        # installs Docker if needed, builds, start
 ```
 Update later: upload the new files and run `bash deploy.sh` again. Logs: `docker compose logs -f bot`.
 
-`BASE_URL` is set automatically to `https://$DOMAIN` (needed for Monetag ads and Stream/Download links).
+`BASE_URL` is set automatically to `https://$DOMAIN` (needed for Monetag ads and permanent links).
 Only **one** instance may run per `BOT_TOKEN` (stop old deployments on Koyeb/Replit/Render first).
 
 **Without Docker:**
 ```bash
-python3 -m venv venv && . venv/bin/activate && pip install -r requirements.txt tgcrypto && python main.py
+python3 -m venv venv && . venv/bin/activate && pip install -r requirements.txt && python main.py
 ```
 Put your own reverse proxy (nginx/Caddy, `proxy_buffering off`) in front of port 8080 and set `BASE_URL`.
 
@@ -102,11 +102,11 @@ If a user types to the *file* bot, he is pointed to the Support Bot instead of m
 - **🗑 Delete copied files** – removes exactly the messages the bot copied into a destination in one go (ids are stored in MongoDB, so it also works after a restart). **🧹 Wipe a whole chat** deletes *everything* in a chat (e.g. Saved Messages) after a confirmation.
 
 ## 🖥 VPS Usage & Contabo plan advice (Panel → VPS Usage, owner only)
-- The bot samples CPU, RAM, network speed and live streaming viewers every 15 s and saves one small record per hour (kept ~13 months, IST days).
+- The bot samples CPU, RAM and network speed every 15 s and saves one small record per hour (kept ~13 months, IST days).
 - **Daily** (7 days) · **Weekly** (8 weeks) · **Monthly** (6 months) tables: CPU/RAM average + peak, data sent, highest Mbps. Monthly also shows the busiest hours and weekdays.
 - **💡 Plan advice** picks the cheapest Contabo plan that fits your real peaks (70 % CPU target, +40 % RAM, +30 % disk/speed headroom), tells which plan your VPS looks like and how much you would save. It needs ~2 weeks of data to be reliable.
 - Plan prices are approximate: check https://contabo.com/en/pricing/ and edit `DEFAULT_PLANS` in `utils/usage.py`, or set `CONTABO_PLANS_JSON` in `.env`.
-- Files sent inside Telegram chats use Telegram's servers, not your VPS. Only Stream/Download links, ads page and uploads use VPS bandwidth.
+- Files sent inside Telegram chats use Telegram's servers, not your VPS. Only the ads page and uploads use VPS bandwidth.
 
 ## Post type 3 - 👑 Vault Pack
 

@@ -3,14 +3,7 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_
 WORKDIR /app
 
 COPY requirements.txt .
-# TgCrypto = fast MTProto encryption (makes Stream/Download noticeably faster). It needs a C compiler to build,
-# so gcc is installed only for this step and removed again. If it fails the bot still works (just slower streaming).
-RUN apt-get update \
- && apt-get install -y --no-install-recommends gcc libc6-dev \
- && pip install -r requirements.txt \
- && (pip install tgcrypto || echo "TgCrypto not installed - streaming will use the slower pure-Python crypto") \
- && apt-get purge -y --auto-remove gcc libc6-dev \
- && rm -rf /var/lib/apt/lists/*
+RUN pip install -r requirements.txt
 
 COPY . .
 RUN useradd -m -u 10001 bot && chown -R bot:bot /app

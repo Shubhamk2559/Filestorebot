@@ -21,11 +21,11 @@ BOT_TOKEN = _required("BOT_TOKEN")
 MONGO_URI = _required("MONGO_URI")
 OWNER_ID = int(_required("OWNER_ID"))
 
-# Kept for Pyrogram compatibility; python-telegram-bot does not need them.
+# Optional: only for the MTProto session (Autoposter "Range" + Duo Reel preview). Plain forwarding does not need them.
 API_ID = int(os.getenv("API_ID", "0") or 0)
 API_HASH = os.getenv("API_HASH", "")
 
-# Public https URL of this deployment, no trailing slash (e.g. https://myapp.koyeb.app). Needed for Stream/Download links.
+# Public https URL of this deployment, no trailing slash (e.g. https://myapp.koyeb.app). Needed for the ads Mini App / web panel / permanent links.
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 
 # Cloudflare Worker that makes every share link permanent (see cloudflare-worker/worker.js). Optional.
