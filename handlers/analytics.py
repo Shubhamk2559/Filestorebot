@@ -1,10 +1,11 @@
 """
 handlers/analytics.py
-Earnings & Analytics screens of the admin panel (owner only).
+Earnings screens of the admin panel (owner only).
 
-  Panel -> 📈 Earnings
-      summary table   Today / 7 days / 30 days / All time
-      📅 Daily        last 14 days        🗓 Monthly   last 12 months        🏆 Top links
+  Panel -> 💰 Monetization -> 📈 Earnings
+      summary         Today / 7 days / 30 days / All time earned + eCPM
+      📅 Daily        last 14 days        🗓 Monthly   last 12 months
+      🏆 Top Links    most opened links   📊 Traffic   views, ads, clicks, users ...
 
 Where the numbers come from
   * earnings, ads shown, clicks   Monetag postback (estimated_price) - counted per day from the moment
@@ -19,9 +20,10 @@ import logging
 from telegram import InlineKeyboardMarkup as M
 
 from database import db
-from handlers.admin import B, action, show
+from handlers.admin import action, show
 from utils import ads
 from utils.helpers import owner_only
+from utils.keyboards import ub
 
 log = logging.getLogger(__name__)
 TZ_NAME = "Asia/Kolkata"
@@ -98,9 +100,10 @@ def _range(n: int):
 # ------------------------------------------------------------------ screens
 def _kb(active: str = ""):
     return M([
-        [B("📅 Daily", "adm:an:d"), B("🗓 Monthly", "adm:an:m"), B("🏆 Top links", "adm:an:t")],
-        [B("🔄 Refresh", f"adm:an:{active}" if active else "adm:an"), B("📺 Ads", "adm:ads")],
-        [B("🔙 Back", "adm:home")],
+        [ub("📅 Daily", "adm:an:d"), ub("🗓 Monthly", "adm:an:m")],
+        [ub("🏆 Top Links", "adm:an:t"), ub("📊 Traffic", "adm:an:x")],
+        [ub("🔄 Refresh", f"adm:an:{active}" if active else "adm:an"), ub("📺 Ads", "adm:ads")],
+        [ub("🔙 Back", "adm:monet")],
     ])
 
 
@@ -114,22 +117,55 @@ async def a_an(update, context, args):
         await _monthly(update)
     elif view == "t":
         await _top(update)
+    elif view == "x":
+        await _traffic(update)
     else:
         await _summary(update)
 
 
 async def _summary(update):
     d30 = _range(30)
-    first30 = str(d30[-1])
-    docs, all_docs = await _daily_docs(first30), None
+    docs = await _daily_docs(str(d30[-1]))
+    all_docs = await _daily_docs()
+    tot_rev = sum(d.get("rev", 0) or 0 for d in all_docs.values())
+    tot_imp = sum(d.get("imp", 0) or 0 for d in all_docs.values())
+    rev30, imp30 = _sum(docs, d30, "rev"), _sum(docs, d30, "imp")
+    views30 = _sum(docs, d30, "views")
+    ecpm = _m(rev30 / imp30 * 1000) if imp30 else "—"
+    per_view = _m(rev30 / views30) if views30 else "—"
+    rows = [["TODAY", _m(_sum(docs, _range(1), "rev"))],
+            ["7 DAYS", _m(_sum(docs, _range(7), "rev"))],
+            ["30 DAYS", _m(rev30)],
+            ["ALL TIME", _m(tot_rev)]]
+
+    note = ""
+    if not ads.zone() or not ads.mini_app_ready():
+        note = "\n⚠️ ADS ARE NOT SET UP YET."
+    elif tot_imp and not tot_rev:
+        note = "\n⚠️ MONETAG SENDS NO PRICE. CHECK THE POSTBACK URL IN 📺 ADS."
+    elif not tot_imp:
+        note = "\nℹ️ NO AD POSTBACKS YET."
+
+    await show(
+        update,
+        "📈 <b>EARNINGS</b>\n\n"
+        + _table(rows, [10, 10]) +
+        f"🎯 eCPM ▸ <b>{ecpm}</b> · PER VIEW ▸ <b>{per_view}</b>\n"
+        "<i>MONETAG ESTIMATE · FINAL PAYOUT IS IN MONETAG.</i>" + note,
+        _kb(),
+    )
+
+
+async def _traffic(update):
+    d30 = _range(30)
+    docs = await _daily_docs(str(d30[-1]))
     since = _since_ts(d30[-1])
     users30 = await _per_period(db.users_col, "joined", since, "%Y-%m-%d")
     links30 = await _per_period(db.links_col, "created", since, "%Y-%m-%d")
     files30 = await _per_period(db.files_col, "date", since, "%Y-%m-%d")
-
     all_docs = await _daily_docs()
     tot = {k: sum(d.get(k, 0) or 0 for d in all_docs.values())
-           for k in ("rev", "imp", "clk", "views", "gates", "verified", "fallback", "blocked")}
+           for k in ("imp", "clk", "views", "gates", "verified", "fallback", "blocked")}
     st = await ads.get_stats()                              # lifetime ad counters (older than daily tracking)
     views_all = 0
     try:
@@ -139,50 +175,23 @@ async def _summary(update):
         pass
     n_users, n_links, n_files = (await db.users_col.count_documents({}), await db.links_col.count_documents({}),
                                  await db.files_col.count_documents({}))
-
     cols = [_range(1), _range(7), d30]
 
-    def row(label, f_docs, fmt, all_val):
-        return [label] + [fmt(f_docs(c)) for c in cols] + [fmt(all_val)]
+    def row(label, f_docs, all_val):
+        return [label] + [_n(f_docs(c)) for c in cols] + [_n(all_val)]
 
-    rows = [["", "Today", "7d", "30d", "All"],
-            row("Earned", lambda c: _sum(docs, c, "rev"), _m, tot["rev"]),
-            row("Views", lambda c: _sum(docs, c, "views"), _n, max(views_all, tot["views"])),
-            row("Ads shown", lambda c: _sum(docs, c, "imp"), _n, tot["imp"]),
-            row("Clicks", lambda c: _sum(docs, c, "clk"), _n, tot["clk"]),
-            row("Ad gates", lambda c: _sum(docs, c, "gates"), _n, tot["gates"]),
-            row("Verified", lambda c: _sum(docs, c, "verified"), _n, max(st.get("verified", 0), tot["verified"])),
-            row("Free files", lambda c: _sum(docs, c, "fallback"), _n, max(st.get("fallback", 0), tot["fallback"])),
-            row("Blocked", lambda c: _sum(docs, c, "blocked"), _n, max(st.get("blocked", 0), tot["blocked"])),
-            row("New users", lambda c: _sum_map(users30, c), _n, n_users),
-            row("Links", lambda c: _sum_map(links30, c), _n, n_links),
-            row("Files", lambda c: _sum_map(files30, c), _n, n_files)]
-
-    imp30, rev30 = _sum(docs, d30, "imp"), _sum(docs, d30, "rev")
-    ecpm = f"{_m(rev30 / imp30 * 1000)}" if imp30 else "—"
-    per_view = f"{_m(rev30 / _sum(docs, d30, 'views'))}" if _sum(docs, d30, "views") else "—"
-    since_txt = min(all_docs) if all_docs else "not yet"
-
-    note = ""
-    if not ads.zone() or not ads.mini_app_ready():
-        note = "\n⚠️ Ads are not configured, so there are no earnings to count."
-    elif tot["imp"] and not tot["rev"]:
-        note = ("\n⚠️ Monetag sends no price yet. Make sure the Postback URL in Monetag is the one "
-                "shown in 📺 Ads (it contains <code>estimated_price</code>).")
-    elif not tot["imp"]:
-        note = "\nℹ️ No ad postbacks received yet."
-
-    await show(
-        update,
-        "📈 <b>Earnings &amp; Analytics</b>\n"
-        "<i>Days change at 12:00 AM IST</i>\n\n"
-        + _table(rows, [10, 7, 7, 7, 7]) +
-        f"\n🎯 eCPM (30d): <b>{ecpm}</b> per 1000 ads · per view: <b>{per_view}</b>\n"
-        f"🕒 Earnings &amp; ads counted since: <b>{since_txt}</b>\n"
-        "💡 Earnings are Monetag's estimate; the final payout is in your Monetag dashboard."
-        + note,
-        _kb(),
-    )
+    rows = [["", "TODAY", "7D", "30D", "ALL"],
+            row("VIEWS", lambda c: _sum(docs, c, "views"), max(views_all, tot["views"])),
+            row("ADS", lambda c: _sum(docs, c, "imp"), tot["imp"]),
+            row("CLICKS", lambda c: _sum(docs, c, "clk"), tot["clk"]),
+            row("GATES", lambda c: _sum(docs, c, "gates"), tot["gates"]),
+            row("VERIFIED", lambda c: _sum(docs, c, "verified"), max(st.get("verified", 0), tot["verified"])),
+            row("FREE", lambda c: _sum(docs, c, "fallback"), max(st.get("fallback", 0), tot["fallback"])),
+            row("BLOCKED", lambda c: _sum(docs, c, "blocked"), max(st.get("blocked", 0), tot["blocked"])),
+            row("USERS", lambda c: _sum_map(users30, c), n_users),
+            row("LINKS", lambda c: _sum_map(links30, c), n_links),
+            row("FILES", lambda c: _sum_map(files30, c), n_files)]
+    await show(update, "📊 <b>TRAFFIC</b>\n\n" + _table(rows, [9, 7, 6, 6, 6]), _kb("x"))
 
 
 async def _daily(update):
@@ -190,12 +199,12 @@ async def _daily(update):
     docs = await _daily_docs(str(days[-1]))
     since = _since_ts(days[-1])
     users = await _per_period(db.users_col, "joined", since, "%Y-%m-%d")
-    rows = [["Date", "Earned", "Views", "Ads", "Users"]]
+    rows = [["DATE", "EARNED", "VIEWS", "ADS", "USERS"]]
     for d in days:
         x = docs.get(str(d), {})
         rows.append([d.strftime("%d %b"), _m(x.get("rev")), _n(x.get("views")), _n(x.get("imp")),
                      _n(users.get(str(d), 0))])
-    await show(update, "📅 <b>Last 14 days</b>\n\n" + _table(rows, [7, 8, 7, 7, 7]), _kb("d"))
+    await show(update, "📅 <b>LAST 14 DAYS</b>\n\n" + _table(rows, [7, 8, 7, 7, 7]), _kb("d"))
 
 
 async def _monthly(update):
@@ -216,20 +225,21 @@ async def _monthly(update):
         a = agg.setdefault(day[:7], {"rev": 0, "views": 0, "imp": 0})
         for k in a:
             a[k] += x.get(k, 0) or 0
-    rows = [["Month", "Earned", "Views", "Ads", "Users"]]
+    rows = [["MONTH", "EARNED", "VIEWS", "ADS", "USERS"]]
     for mo in months:
         a = agg.get(mo, {})
         label = dt.date.fromisoformat(mo + "-01").strftime("%b %y")
         rows.append([label, _m(a.get("rev")), _n(a.get("views")), _n(a.get("imp")), _n(users.get(mo, 0))])
-    await show(update, "🗓 <b>Last 12 months</b>\n\n" + _table(rows, [7, 8, 7, 7, 7]), _kb("m"))
+    await show(update, "🗓 <b>LAST 12 MONTHS</b>\n\n" + _table(rows, [7, 8, 7, 7, 7]), _kb("m"))
 
 
 async def _top(update):
     top = await db.links_col.find({"views": {"$gt": 0}}).sort("views", -1).limit(10).to_list(10)
     if not top:
-        text = "🏆 <b>Top links</b>\n\nNo link has been opened yet."
+        text = "🏆 <b>TOP LINKS</b>\n\nNO LINK HAS BEEN OPENED YET."
     else:
-        lines = [f"{i}. {html.escape((l.get('label') or 'Link')[:30])} - <b>{_n(l.get('views'))}</b> views"
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}
+        lines = [f"{medal.get(i, f'{i}.')} {html.escape((l.get('label') or 'Link')[:30])} ▸ <b>{_n(l.get('views'))}</b>"
                  for i, l in enumerate(top, 1)]
-        text = "🏆 <b>Top links</b>\n\n" + "\n".join(lines)
+        text = "🏆 <b>TOP LINKS</b>\n\n" + "\n".join(lines)
     await show(update, text, _kb("t"))

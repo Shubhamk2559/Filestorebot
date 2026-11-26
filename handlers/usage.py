@@ -2,10 +2,9 @@
 handlers/usage.py
 VPS Usage screens of the admin panel (owner only).
 
-  Panel -> 🖥 VPS Usage
-      summary    right now + Today / 7d / 30d
-      📅 Daily   last 7 days       📆 Weekly   last 8 weeks      🗓 Monthly   last 6 months + usage patterns
-      💡 Plan advice   cheapest Contabo plan that fits your real usage
+  Panel -> 🖥 Servers -> VPS Usage
+      live dashboard (bars) + Today / 7d / 30d
+      📅 Daily   📆 Weekly   🗓 Monthly (+ busy hours)   💡 Plan Advice (cheapest Contabo plan that fits)
 
 Numbers are collected by utils/usage.py (hourly documents in MongoDB, IST days).
 """
@@ -15,9 +14,10 @@ import logging
 
 from telegram import InlineKeyboardMarkup as M
 
-from handlers.admin import B, action, show
+from handlers.admin import action, show
 from utils import usage as U
 from utils.helpers import owner_only
+from utils.keyboards import ub
 
 log = logging.getLogger(__name__)
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -51,11 +51,18 @@ def _mbps(x) -> str:
     return f"{x:.0f}" if x >= 10 else f"{x:.1f}"
 
 
+def _bar(pct, n: int = 12) -> str:
+    """█████░░░░░░░ - a pct (0-100) bar."""
+    k = max(0, min(n, round(float(pct or 0) / 100 * n)))
+    return "█" * k + "░" * (n - k)
+
+
 def _kb(active: str = ""):
     return M([
-        [B("📅 Daily", "adm:vps:d"), B("📆 Weekly", "adm:vps:w"), B("🗓 Monthly", "adm:vps:m")],
-        [B("💡 Plan advice", "adm:vps:p")],
-        [B("🔄 Refresh", f"adm:vps:{active}" if active else "adm:vps"), B("🔙 Back", "adm:home")],
+        [ub("📅 Daily", "adm:vps:d"), ub("📆 Weekly", "adm:vps:w")],
+        [ub("🗓 Monthly", "adm:vps:m"), ub("💡 Plan Advice", "adm:vps:p")],
+        [ub("🔄 Refresh", f"adm:vps:{active}" if active else "adm:vps")],
+        [ub("🔙 Back", "adm:servers")],
     ])
 
 
@@ -64,14 +71,13 @@ def _row(label, a):
             _bytes(a["net_out"]), _mbps(a["mbps"])]
 
 
-HEAD = ["", "CPU%", "RAM%", "Out", "Mbps"]
-WIDTHS = [7, 7, 7, 8, 6]
-LEGEND = ("<i>CPU/RAM = average/peak %. Out = data sent by the bot. Mbps = highest speed seen.</i>")
+HEAD = ["", "CPU%", "RAM%", "OUT", "MBPS"]
+WIDTHS = [8, 7, 7, 8, 6]
+LEGEND = "<i>AVG/PEAK %</i>"
 
 
-def _need_data(update_text: str = ""):
-    return ("🖥 <b>VPS Usage</b>\n\nNo data yet. The bot records a sample every 15 seconds and saves it every "
-            "5 minutes, so check again in a few minutes." + update_text)
+def _need_data():
+    return "🖥 <b>VPS USAGE</b>\n\n📭 NO DATA YET. CHECK AGAIN IN A FEW MINUTES."
 
 
 # ------------------------------------------------------------------ router
@@ -94,7 +100,7 @@ async def a_vps(update, context, args):
 # ------------------------------------------------------------------ screens
 async def _summary(update):
     if not U.supported():
-        await show(update, "🖥 <b>VPS Usage</b>\n\n⚠️ Needs a Linux server (/proc not found).", _kb())
+        await show(update, "🖥 <b>VPS USAGE</b>\n\n⚠️ NEEDS A LINUX SERVER.", _kb())
         return
     t = U.today()
     docs = await U.load_hours(t - dt.timedelta(days=29))
@@ -103,23 +109,27 @@ async def _summary(update):
         return
     d_today = [d for d in docs if d["_id"][:10] == t.isoformat()]
     d7 = [d for d in docs if d["_id"][:10] >= (t - dt.timedelta(days=6)).isoformat()]
-    rows = [HEAD, _row("Today", U.total(d_today)), _row("7 days", U.total(d7)), _row("30 days", U.total(docs))]
+    rows = [HEAD, _row("TODAY", U.total(d_today)), _row("7 DAYS", U.total(d7)), _row("30 DAYS", U.total(docs))]
 
-    now = U.last
     live = ""
+    now = U.last
     if now:
-        live = (f"\n⚡ <b>Right now</b>: CPU {now['cpu']:.0f}% · RAM {now['ram']:.0f}% "
-                f"({now['ram_used_mb'] / 1024:.1f}/{now['ram_total_mb'] / 1024:.1f} GB) · "
-                f"{now['mbps']:.1f} Mbps · {now['streams']} streaming\n"
-                f"🤖 Bot process: {now['bot_rss_mb']:.0f} MB RAM · 💽 Disk {now['disk_used_gb']:.1f}/{now['disk_total_gb']:.0f} GB\n")
+        disk_pct = now["disk_used_gb"] / now["disk_total_gb"] * 100 if now["disk_total_gb"] else 0
+        live = ("<pre>"
+                f"CPU  {_bar(now['cpu'])} {now['cpu']:>3.0f}%\n"
+                f"RAM  {_bar(now['ram'])} {now['ram']:>3.0f}%\n"
+                f"DISK {_bar(disk_pct)} {disk_pct:>3.0f}%"
+                "</pre>"
+                f"⚡ <b>{now['ram_used_mb'] / 1024:.1f}</b>/{now['ram_total_mb'] / 1024:.1f} GB RAM · "
+                f"<b>{now['disk_used_gb']:.1f}</b>/{now['disk_total_gb']:.0f} GB DISK\n"
+                f"🌐 <b>{now['mbps']:.1f}</b> MBPS · 👥 <b>{now['streams']}</b> STREAMING · "
+                f"🤖 BOT <b>{now['bot_rss_mb']:.0f}</b> MB\n\n")
     tot = U.total(docs)
     days = len({d["_id"][:10] for d in docs})
     await show(
         update,
-        "🖥 <b>VPS Usage</b>\n<i>Days change at 12:00 AM IST</i>\n"
-        + live + "\n" + _table(rows, WIDTHS) + LEGEND +
-        f"\n\n📊 Average load over {days} day(s): <b>CPU {tot['cpu_avg']:.0f}%</b> · <b>RAM {tot['ram_avg']:.0f}%</b>\n"
-        "👉 Tap <b>Plan advice</b> to see which Contabo plan fits this usage.",
+        "🖥 <b>VPS USAGE</b>\n\n" + live + _table(rows, WIDTHS) + LEGEND +
+        f"\n\n📊 AVG LOAD ({days} D) ▸ CPU <b>{tot['cpu_avg']:.0f}%</b> · RAM <b>{tot['ram_avg']:.0f}%</b>",
         _kb(),
     )
 
@@ -132,13 +142,13 @@ async def _daily(update):
         await show(update, _need_data(), _kb("d"))
         return
     agg = U.rollup(docs, U.day_key)
-    rows = [["Date"] + HEAD[1:]]
+    rows = [["DATE"] + HEAD[1:]]
     for d in days:
         a = agg.get(d.isoformat())
         rows.append(_row(d.strftime("%d %b"), a) if a else [d.strftime("%d %b"), "-", "-", "-", "-"])
     peak_streams = max((a["streams"] for a in agg.values()), default=0)
-    await show(update, "📅 <b>Last 7 days</b>\n\n" + _table(rows, WIDTHS) + LEGEND +
-               f"\n👥 Most viewers streaming at once: <b>{peak_streams}</b>", _kb("d"))
+    await show(update, "📅 <b>LAST 7 DAYS</b>\n\n" + _table(rows, WIDTHS) + LEGEND +
+               f"\n👥 PEAK STREAMING ▸ <b>{peak_streams}</b>", _kb("d"))
 
 
 async def _weekly(update):
@@ -150,11 +160,11 @@ async def _weekly(update):
         await show(update, _need_data(), _kb("w"))
         return
     agg = U.rollup(docs, U.week_key)
-    rows = [["Week of"] + HEAD[1:]]
+    rows = [["WEEK"] + HEAD[1:]]
     for w in weeks:
         a = agg.get(w.isoformat())
         rows.append(_row(w.strftime("%d %b"), a) if a else [w.strftime("%d %b"), "-", "-", "-", "-"])
-    await show(update, "📆 <b>Last 8 weeks</b> <i>(Mon-Sun)</i>\n\n" + _table(rows, WIDTHS) + LEGEND, _kb("w"))
+    await show(update, "📆 <b>LAST 8 WEEKS</b>\n\n" + _table(rows, WIDTHS) + LEGEND, _kb("w"))
 
 
 async def _monthly(update):
@@ -170,7 +180,7 @@ async def _monthly(update):
         await show(update, _need_data(), _kb("m"))
         return
     agg = U.rollup(docs, U.month_key)
-    rows = [["Month"] + HEAD[1:]]
+    rows = [["MONTH"] + HEAD[1:]]
     for mo in months:
         a = agg.get(mo)
         label = dt.date.fromisoformat(mo + "-01").strftime("%b %y")
@@ -179,18 +189,18 @@ async def _monthly(update):
     recent = [d for d in docs if d["_id"][:10] >= (t - dt.timedelta(days=29)).isoformat()]
     pat = U.patterns(recent)
     ho = pat["hour_out"]
-    metric, name = (ho, "data sent") if max(ho) > 0 else (pat["hour_cpu"], "CPU")
+    metric, name = (ho, "DATA") if max(ho) > 0 else (pat["hour_cpu"], "CPU")
     best = sorted(range(24), key=lambda h: metric[h], reverse=True)[:3]
     best_txt = ", ".join(f"{h:02d}:00-{(h + 1) % 24:02d}:00" for h in sorted(best)) if max(metric) > 0 else "-"
     wd = pat["weekday_out"]
     wd_best = DAYS[max(range(7), key=lambda i: wd[i])] if max(wd) > 0 else "-"
 
-    text = ("🗓 <b>Last 6 months</b>\n\n" + _table(rows, WIDTHS) + LEGEND +
-            f"\n\n⏰ <b>Daily pattern (IST, last 30 days, {name})</b>\n"
+    text = ("🗓 <b>LAST 6 MONTHS</b>\n\n" + _table(rows, WIDTHS) + LEGEND +
+            f"\n\n⏰ <b>BUSY HOURS</b> <i>(IST · 30 D · {name})</i>\n"
             f"<pre>00-11 {U.spark(metric[:12])}\n12-23 {U.spark(metric[12:])}</pre>"
-            f"🔥 Busiest hours: <b>{best_txt}</b>\n\n"
-            f"📆 <b>Weekday pattern</b>\n<pre>{'  '.join(d[0] for d in DAYS)}\n{'  '.join(U.spark(wd))}</pre>"
-            f"Busiest day: <b>{wd_best}</b>")
+            f"🔥 PEAK ▸ <b>{best_txt}</b>\n\n"
+            f"📆 <b>WEEKDAYS</b>\n<pre>{'  '.join(d[0] for d in DAYS)}\n{'  '.join(U.spark(wd))}</pre>"
+            f"🏆 BUSIEST DAY ▸ <b>{wd_best.upper()}</b>")
     await show(update, text, _kb("m"))
 
 
@@ -203,62 +213,40 @@ async def _advice(update):
         return
     pick, cur, u = r["pick"], r["current"], r["util"]
     cs, term = U.currency(), U.best_term()
-    vat_txt = f", incl. {U.vat_pct():g}% VAT" if U.vat_pct() else ", excl. VAT"
-    if r["days"] >= 14:
-        conf = "🟢 Good data"
-    elif r["days"] >= 3:
-        conf = f"🟡 Only {r['days']} day(s) of data - check again after 2 weeks for a reliable answer"
-    else:
-        conf = f"🔴 Very little data ({r['days']} day) - treat this as a rough guess"
+    vat_txt = f"INCL. {U.vat_pct():g}% VAT" if U.vat_pct() else "EXCL. VAT"
+    conf = ("🟢 GOOD DATA" if r["days"] >= 14 else
+            f"🟡 {r['days']} D OF DATA" if r["days"] >= 3 else f"🔴 {r['days']} D OF DATA")
 
     lines = [
-        "💡 <b>Contabo plan advice</b>",
-        f"<i>Based on your last {r['days']} day(s) of real usage</i> · {conf}\n",
-        "<b>What your users really need</b> (peak + safety room)",
-        f"• CPU: {r['need_cores']} vCPU  <i>(peak {r['cpu_peak']:.0f}%, normal peak {r['cpu_p95']:.0f}% of {r['cores']} cores)</i>",
-        f"• RAM: {r['need_ram_gb']:.1f} GB  <i>(highest use {r['ram_peak_mb'] / 1024:.2f} GB)</i>",
-        f"• Disk: {r['need_disk_gb']:.0f} GB  <i>(using {r['disk_now']:.1f} GB, +{max(r['growth_30d'], 0):.1f} GB / month)</i>",
-        f"• Speed: {r['need_port']:.0f} Mbit/s  <i>(highest seen {r['mbps_peak']:.0f}, {r['streams_peak']} viewers at once)</i>",
-        f"• Traffic: ≈ {r['out_tb_month']:.2f} TB / month out  <i>(Contabo fair-use ≈ {U.FAIR_USE_TB} TB)</i>\n",
+        f"💡 <b>PLAN ADVICE</b> ▸ {conf}\n",
+        "<b>YOU NEED</b>",
+        f"⚙️ CPU ▸ <b>{r['need_cores']}</b> vCPU · RAM ▸ <b>{r['need_ram_gb']:.1f}</b> GB",
+        f"💽 DISK ▸ <b>{r['need_disk_gb']:.0f}</b> GB · NET ▸ <b>{r['need_port']:.0f}</b> Mbit/s",
+        f"📦 TRAFFIC ▸ <b>{r['out_tb_month']:.2f}</b> TB / MONTH\n",
     ]
     if r["undersized"]:
-        lines.append(f"⚠️ Even the biggest plan in the list ({pick['name']}) is tight for this usage. "
-                     "Consider splitting the load (e.g. move streaming to a second server).")
+        lines.append(f"⚠️ EVEN <b>{pick['name']}</b> IS TIGHT. SPLIT THE LOAD (E.G. A 2ND SERVER FOR STREAMING).")
     else:
-        lines.append(f"✅ <b>Recommended: {pick['name']}</b> - {pick['cores']} vCPU · {pick['ram_gb']} GB RAM · "
-                     f"{pick['disk_gb']} GB · {pick['port']} Mbit/s")
-        lines.append(f"💰 <b>{cs}{U.price(pick):.2f}/month</b> on the {term}-month term"
-                     f"{vat_txt} (cheapest way to buy this plan)")
-        if term != 1:
-            lines.append(f"<i>1-month term: {cs}{U.price(pick, 1):.2f}/month "
-                         f"(+ small one-time setup fee at checkout).</i>")
-        lines.append(f"It would run at about CPU {u['cpu']:.0f}% · RAM {u['ram']:.0f}% · Disk {u['disk']:.0f}% · "
-                     f"Port {u['port']:.0f}% at your busiest moments.")
+        lines.append(f"✅ <b>BEST FIT ▸ {pick['name']}</b>")
+        lines.append(f"{pick['cores']} vCPU · {pick['ram_gb']} GB · {pick['disk_gb']} GB · {pick['port']} Mbit/s")
+        lines.append(f"💰 <b>{cs}{U.price(pick):.2f}</b> / MONTH ({term}-MONTH TERM, {vat_txt})")
+        lines.append(f"📈 PEAK LOAD ▸ CPU {u['cpu']:.0f}% · RAM {u['ram']:.0f}% · DISK {u['disk']:.0f}%")
     if cur:
         if cur["eur"] > pick["eur"] and not r["undersized"]:
             diff = U.price(cur) - U.price(pick)
-            lines.append(f"\n💸 Your VPS looks like <b>{cur['name']}</b> ({cs}{U.price(cur):.2f}/month). "
-                         f"Switching to {pick['name']} saves ≈ <b>{cs}{diff:.2f}/month</b> "
-                         f"({cs}{diff * 12:.0f}/year).")
+            lines.append(f"\n💸 YOU HAVE <b>{cur['name']}</b> ▸ SWITCH TO SAVE <b>{cs}{diff:.2f}</b> / MONTH ({cs}{diff * 12:.0f} / YEAR)")
         elif cur["name"] == pick["name"]:
-            lines.append(f"\n👍 Your VPS already looks like <b>{cur['name']}</b> - the right size.")
+            lines.append(f"\n👍 YOU HAVE <b>{cur['name']}</b> ▸ PERFECT SIZE")
         else:
-            lines.append(f"\n⚠️ Your VPS looks like <b>{cur['name']}</b>, smaller than recommended - upgrade when peaks grow.")
-    else:
-        lines.append(f"\nℹ️ Detected {r['cores']} vCPU / {r['ram_total_mb'] / 1024:.1f} GB RAM (not a plain Cloud VPS size). "
-                     "Plus / VDS plans cost more for the same cores and RAM.")
+            lines.append(f"\n⚠️ YOU HAVE <b>{cur['name']}</b> ▸ SMALLER THAN NEEDED, UPGRADE SOON")
     if r["alts"] and not r["undersized"]:
         base = U.price(pick) / (1 + U.vat_pct() / 100)          # Contabo, ex-VAT, so the comparison is fair
-        lines.append(f"\n🏷 <b>Other providers that also fit</b> <i>(approx, excl. VAT; Contabo = {cs}{base:.2f})</i>")
-        for a in r["alts"][:4]:
+        lines.append(f"\n🏷 <b>ALTERNATIVES</b> <i>(EXCL. VAT · CONTABO {cs}{base:.2f})</i>")
+        for a in r["alts"][:3]:
             tag = " ⚠️" if a.get("risky") else ""
-            lines.append(f"• {a['provider']} {a['name']} - {a['cores']} vCPU · {a['ram_gb']:g} GB · "
-                         f"{a['disk_gb']} GB · <b>{cs}{a['usd']:.2f}</b>{tag}\n  <i>{a.get('note', '')}</i>")
-        cheaper = [a for a in r["alts"] if not a.get("risky") and a["usd"] < base]
-        if not cheaper:
-            lines.append("✅ No reliable provider is cheaper than Contabo for this size right now.")
+            lines.append(f"• {a['provider']} {a['name']} · {a['cores']} vCPU · {a['ram_gb']:g} GB · <b>{cs}{a['usd']:.2f}</b>{tag}")
+        if not [a for a in r["alts"] if not a.get("risky") and a["usd"] < base]:
+            lines.append("✅ NO RELIABLE PROVIDER IS CHEAPER.")
     if r["out_tb_month"] > U.FAIR_USE_TB * 0.8:
-        lines.append(f"\n⚠️ Traffic is close to the {U.FAIR_USE_TB} TB fair-use limit.")
-    lines.append(f"\n<i>Prices = Contabo checkout style ({term}-month term{vat_txt}). Change with CONTABO_TERM (1/12/24), "
-                 "CONTABO_VAT, CONTABO_CURRENCY or CONTABO_PLANS_JSON in .env - confirm on contabo.com/en/vps.</i>")
+        lines.append(f"\n⚠️ TRAFFIC IS NEAR THE {U.FAIR_USE_TB} TB FAIR-USE LIMIT.")
     await show(update, "\n".join(lines), _kb("p"))

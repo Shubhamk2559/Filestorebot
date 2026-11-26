@@ -222,21 +222,8 @@ async def show_cb(update, cid: int, note: str = ""):
     if not ch:
         await _gone(update)
         return
-    tpl = (ch.get("cap_tpl") or "").replace("{caption}", "").strip()
-    btn = ch.get("btn") or AP.DEFAULT_BTN
     await show(update,
-               f"{note}🎨 <b>CAPTION &amp; BUTTON</b> — {html.escape(ch['title'])}\n\n"
-               f"📝 CAPTION: {tpl or '<i>NOT SET</i>'}\n"
-               f"🔘 BUTTON: <b>{html.escape(btn)}</b>\n"
-               f"🖼 THUMBNAIL: <b>{'SET ✅' if ch.get('fthumb') else 'NOT SET ⚠️'}</b>\n\n"
-               f"<b>{TYPES['pair']}</b>\n"
-               f"🔘 <b>{html.escape(ch.get('btn_img') or AP.DEFAULT_BTN_IMG)}</b> · "
-               f"<b>{html.escape(ch.get('btn_vid') or AP.DEFAULT_BTN_VID)}</b>\n\n"
-               f"<b>{TYPES['batch']}</b>\n"
-               f"🌐 IMGBB KEYS: <b>{len(BT.keys()) or 'NONE'}</b>\n"
-               f"📰 TELEGRAPH: <code>{html.escape(ch.get('tg_title') or BT.DEFAULT_TG_TITLE)}</code>\n"
-               f"🔢 LAST POST NO: <b>{ch.get('post_no', 0)}</b>\n"
-               "🏷 TAGS: <code>{Preview Image}</code> <code>{Video Link}</code> <code>{Post Number}</code>",
+               f"{note}🎨 <b>CAPTION</b> — {html.escape(ch['title'])}\n\nSELECT AN OPTION TO CUSTOMIZE YOUR POSTS.",
                M([[U("📝 Caption", f"adm:apcap:{cid}"), U("🔘 Button", f"adm:apbtn:{cid}")],
                   [U("🖼 Thumbnail", f"adm:apthumb:{cid}"), U("🎬 Duo Buttons", f"adm:appbtn:{cid}")],
                   [U("🌐 Imgbb Keys", f"adm:apimg:{cid}"), U("📰 TG Title", f"adm:aptgt:{cid}")],
@@ -263,9 +250,14 @@ async def _saved(msg, cid: int, text: str):
 
 @action("apcap")
 async def a_apcap(update, context, args):
-    context.user_data["ap_cid"] = int(args[0])
+    cid = int(args[0])
+    ch = await db.ap_get_channel(cid) or {}
+    tpl = (ch.get("cap_tpl") or "").replace("{caption}", "").strip()
+    context.user_data["ap_cid"] = cid
     await ask(update, context, "ap_cap",
-              "📝 <b>FIXED CAPTION</b>\n\nSEND THE CAPTION ONCE. EVERY POST OF THIS CHANNEL GETS THIS TEXT.\n"
+              f"📝 <b>CAPTION</b>\n\n{tpl or '<i>NOT SET</i>'}\n\n"
+              "SEND A NEW CAPTION TO REPLACE IT.\n"
+              "TAGS: <code>{Preview Image}</code> <code>{Video Link}</code> <code>{Post Number}</code>\n"
               "SEND <code>-</code> TO REMOVE IT.")
 
 
@@ -287,10 +279,12 @@ async def st_ap_cap(update, context):
 
 @action("apbtn")
 async def a_apbtn(update, context, args):
-    context.user_data["ap_cid"] = int(args[0])
+    cid = int(args[0])
+    ch = await db.ap_get_channel(cid) or {}
+    context.user_data["ap_cid"] = cid
     await ask(update, context, "ap_btn",
-              f"🔘 <b>BUTTON TEXT</b>\n\nSEND THE TEXT FOR THE BUTTON UNDER EVERY POST (MAX {AP.BTN_MAX} CHARS).\n"
-              f"EXAMPLE: <code>⬇️ Download Now</code>\nSEND <code>-</code> FOR DEFAULT.")
+              f"🔘 <b>BUTTON</b>\n\nNOW: <b>{html.escape(ch.get('btn') or AP.DEFAULT_BTN)}</b>\n\n"
+              f"SEND NEW BUTTON TEXT (MAX {AP.BTN_MAX} CHARS).\nSEND <code>-</code> FOR DEFAULT.")
 
 
 @state("ap_btn")
@@ -312,10 +306,11 @@ async def a_apthumb(update, context, args):
     if not S.get("db_channel"):
         await show(update, "⚠️ SET THE DATABASE CHANNEL FIRST.", M([[U("📡 Set Database Channel", "adm:dbch")]]))
         return
+    ch = await db.ap_get_channel(cid) or {}
     context.user_data["ap_cid"] = cid
     await ask(update, context, "ap_thumb",
-              f"🖼 <b>FIXED THUMBNAIL</b>\n\nSEND ONE PHOTO. IT IS USED FOR {TYPES['pair']} POSTS.\n"
-              "SEND <code>-</code> TO REMOVE IT.")
+              f"🖼 <b>THUMBNAIL</b>\n\nNOW: <b>{'SET ✅' if ch.get('fthumb') else 'NOT SET ⚠️'}</b>\n\n"
+              f"SEND ONE PHOTO FOR {TYPES['pair']} POSTS.\nSEND <code>-</code> TO REMOVE IT.")
 
 
 @state("ap_thumb")
@@ -349,10 +344,13 @@ async def st_ap_thumb(update, context):
 
 @action("appbtn")
 async def a_appbtn(update, context, args):
-    context.user_data["ap_cid"] = int(args[0])
+    cid = int(args[0])
+    ch = await db.ap_get_channel(cid) or {}
+    context.user_data["ap_cid"] = cid
     await ask(update, context, "ap_pbtn",
-              f"🎬 <b>DUO BUTTONS</b>\n\nSEND TWO LINES, IMAGE BUTTON THEN VIDEO BUTTON (MAX {AP.BTN_MAX} CHARS EACH):\n"
-              "<code>🖼 Preview</code>\n<code>🎬 Watch Video</code>\n\nSEND <code>-</code> FOR DEFAULT.")
+              f"🎬 <b>DUO BUTTONS</b>\n\nNOW: <b>{html.escape(ch.get('btn_img') or AP.DEFAULT_BTN_IMG)}</b> · "
+              f"<b>{html.escape(ch.get('btn_vid') or AP.DEFAULT_BTN_VID)}</b>\n\n"
+              f"SEND TWO LINES: IMAGE BUTTON, THEN VIDEO BUTTON (MAX {AP.BTN_MAX} CHARS).\nSEND <code>-</code> FOR DEFAULT.")
 
 
 @state("ap_pbtn")
@@ -384,7 +382,7 @@ async def show_keys(update, context, cid: int, note: str = ""):
     rows.append([U("🔙 Back", f"adm:apcb:{cid}")])
     await show(update,
                f"{note}🌐 <b>IMGBB KEYS</b>\n\n"
-               + (f"{len(ks)} KEY(S) · USED IN ROTATION." if ks else "NO KEY YET. GET ONE AT <code>api.imgbb.com</code>."),
+               + (f"🌐 KEYS: <b>{len(ks)}</b> · USED IN ROTATION." if ks else "NO KEY YET. GET ONE AT <code>api.imgbb.com</code>."),
                M(rows))
 
 
@@ -427,12 +425,14 @@ async def st_ap_imgkey(update, context):
 # ---------------------------------------------------------------------- telegraph / post no / spacing
 @action("aptgt")
 async def a_aptgt(update, context, args):
-    context.user_data["ap_cid"] = int(args[0])
+    cid = int(args[0])
+    ch = await db.ap_get_channel(cid) or {}
+    context.user_data["ap_cid"] = cid
     await ask(update, context, "ap_tgtitle",
-              f"📰 <b>TELEGRAPH TITLE</b> ({TYPES['batch']})\n\nSEND THE TITLE OF NEW ARTICLES. "
-              "<code>{folder_name}</code> = FOLDER NAME.\n"
-              "EXAMPLE: <code>{folder_name} - Full Gallery</code>\n"
-              f"SEND <code>-</code> FOR DEFAULT (<code>{BT.DEFAULT_TG_TITLE}</code>).")
+              f"📰 <b>TG TITLE</b> — {TYPES['batch']}\n\n"
+              f"NOW: <code>{html.escape(ch.get('tg_title') or BT.DEFAULT_TG_TITLE)}</code>\n\n"
+              "SEND A NEW TITLE. <code>{folder_name}</code> = FOLDER NAME.\n"
+              "SEND <code>-</code> FOR DEFAULT.")
 
 
 @state("ap_tgtitle")

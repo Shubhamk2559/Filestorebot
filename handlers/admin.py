@@ -39,8 +39,6 @@ from utils.helpers import (
     extract_chat_ref,
     extract_user_id,
     extract_post_id,
-    clear_picker,
-    CANCEL_TEXT,
 )
 from utils import ads
 from utils import chats as CH
@@ -63,17 +61,6 @@ NOPREVIEW = LinkPreviewOptions(is_disabled=True)
 PAGE = 8
 MAX_RANGE = 10000
 TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst", "tr_cl", "tr_wp", "pick_state", "pick_kind", "picked_chat", "ct_uid")
-
-_KB_CLEANED = set()        # admins whose old bottom keyboard was already removed since the bot started
-
-
-async def _kb_cleanup(update):
-    """The old 'Choose a Channel / Cancel' reply keyboard sticks in Telegram until a bot removes it: do that once."""
-    uid = update.effective_user.id if update.effective_user else None
-    if uid is None or uid in _KB_CLEANED or not update.effective_message:
-        return
-    _KB_CLEANED.add(uid)
-    await clear_picker(update.effective_message)
 
 
 ACTIONS = {}
@@ -137,10 +124,6 @@ async def ask_chat(update, context, state_name, text, channel=True, group=False)
     context.user_data["state"] = state_name
     context.user_data["pick_state"] = state_name
     context.user_data["pick_kind"] = (channel, group)
-    try:                      # remove a reply-keyboard picker left over from an older version
-        await clear_picker(update.effective_message)
-    except Exception:
-        pass
     items = await CH.listing(channel, group)
     rows = []
     for d in items:
@@ -196,7 +179,6 @@ def settings_text() -> str:
 
 async def send_panel(update, context):
     """Used by /start for admins."""
-    await clear_picker(update.effective_message)      # also removes any leftover bottom keyboard
     await update.effective_message.reply_text(
         panel_text(),
         reply_markup=K.main_panel(is_owner(update.effective_user.id)),
@@ -222,12 +204,6 @@ async def resolve_channel(update, context, need_post: bool):
     msg = update.effective_message
     picked = context.user_data.pop("picked_chat", None)
 
-    if picked is None and msg.text and msg.text.strip() == CANCEL_TEXT:
-        context.user_data.pop("state", None)
-        await clear_picker(msg)
-        await send_panel(update, context)
-        return None
-
     ref = picked if picked is not None else extract_chat_ref(msg)
 
     if ref is None:
@@ -236,9 +212,6 @@ async def resolve_channel(update, context, need_post: bool):
             reply_markup=K.cancel(),
         )
         return None
-
-    if getattr(msg, "chat_shared", None) is not None:
-        await clear_picker(msg)
 
     try:
         chat = await context.bot.get_chat(ref)
@@ -281,7 +254,6 @@ async def make_invite_link(bot, chat):
 @admin_only
 async def callback_router(update, context):
     q = update.callback_query
-    await _kb_cleanup(update)
     parts = q.data.split(":")[1:]
 
     name, args = parts[0], parts[1:]
@@ -318,15 +290,6 @@ async def message_router(update, context):
     if not is_admin(user.id):          # a normal user writes to the bot -> forwarded to the owner
         from handlers import contact
         await contact.relay(update, context)
-        return
-
-    await _kb_cleanup(update)
-    # the old reply-keyboard ("Choose a Channel / Cancel") may still be stuck on the screen: remove it
-    if (msg.text or "").strip() == CANCEL_TEXT and context.user_data.get("state") != "batch":
-        for k in TEMP_KEYS:
-            context.user_data.pop(k, None)
-        await clear_picker(msg)
-        await send_panel(update, context)
         return
 
     st = context.user_data.get("state")
@@ -1097,30 +1060,24 @@ def _speed(ms) -> str:
 
 def mongo_text(m: dict, detail: bool = False) -> str:
     if not m["ok"]:
-        return ("🍃 <b>MongoDB</b>\n🔴 <b>Not reachable</b>\n"
-                f"<code>{html.escape(m['error'] or 'unknown error')}</code>\n"
-                "Check the cluster in Atlas (it may be paused or the IP is blocked).")
+        return ("🍃 <b>MONGODB</b> ▸ 🔴 <b>NOT REACHABLE</b>\n"
+                f"<code>{html.escape(m['error'] or 'unknown error')}</code>")
     limit = m["limit_mb"] * 1048576
     pct = min(100.0, m["used"] / limit * 100) if limit else 0
     left = max(0, limit - m["used"])
     bar = "🟩" * round(pct / 10) + "⬜" * (10 - round(pct / 10))
-    if pct >= 90:
-        health = "🔴 Almost FULL - delete old data / upgrade now"
-    elif pct >= 80:
-        health = "🟡 Getting full"
-    else:
-        health = "🟢 Healthy"
-    t = (f"🍃 <b>MongoDB</b>\n{health}\n"
-         f"⚡ Ping: {_speed(m['ping_ms'])} · Read: {_speed(m['read_ms'])}\n"
-         f"💾 Used: <b>{_mb(m['used'])}</b> / {m['limit_mb']:g} MB (<b>{pct:.1f}%</b>)\n"
-         f"{bar}\n"
-         f"🆓 Left: <b>{_mb(left)}</b>\n"
-         f"📄 Documents: {m['objects']} · 🗂 Collections: {m['collections']}")
-    if m.get("conn"):
-        t += f"\n🔌 Connections: {m['conn'].get('current')} used, {m['conn'].get('available')} free"
+    health = "🔴 ALMOST FULL" if pct >= 90 else "🟡 GETTING FULL" if pct >= 80 else "🟢 HEALTHY"
+    t = (f"🍃 <b>MONGODB</b> ▸ {health}\n"
+         f"{bar} <b>{pct:.1f}%</b>\n"
+         f"💾 USED ▸ <b>{_mb(m['used'])}</b> / {m['limit_mb']:g} MB\n"
+         f"🆓 LEFT ▸ <b>{_mb(left)}</b>")
     if detail:
-        t += f"\n\n📦 Data {_mb(m['data'])} · Disk {_mb(m['storage'])} · Indexes {_mb(m['index'])}\n"
-        t += "\n".join(f"• <code>{html.escape(n)}</code>: {c} docs · {_mb(sz)}" for n, c, sz in m.get("cols", []))
+        t += (f"\n\n⚡ PING ▸ {_speed(m['ping_ms'])} · READ ▸ {_speed(m['read_ms'])}\n"
+              f"📄 DOCS ▸ <b>{m['objects']}</b> · 🗂 COLLECTIONS ▸ <b>{m['collections']}</b>")
+        if m.get("conn"):
+            t += f"\n🔌 CONNECTIONS ▸ <b>{m['conn'].get('current')}</b> USED · {m['conn'].get('available')} FREE"
+        t += f"\n\n📦 DATA {_mb(m['data'])} · DISK {_mb(m['storage'])} · INDEX {_mb(m['index'])}\n"
+        t += "\n".join(f"• <code>{html.escape(n)}</code> ▸ {c} · {_mb(sz)}" for n, c, sz in m.get("cols", []))
     return t
 
 
@@ -1128,20 +1085,18 @@ def mongo_text(m: dict, detail: bool = False) -> str:
 async def a_stats(update, context, args):
     s = await db.stats()
     m = await db.mongo_status()
-
     await show(
         update,
-        "📊 <b>Statistics</b>\n\n"
-        f"👥 Users: <b>{s['users']}</b>\n"
-        f"📁 Files: <b>{s['files']}</b>\n"
-        f"🔗 Links created: <b>{s['links']}</b>\n"
-        f"🚫 Banned: <b>{s['banned']}</b>\n"
-        f"💤 Blocked the bot: <b>{s['blocked']}</b>\n\n"
+        "📊 <b>STATISTICS</b>\n\n"
+        f"👥 USERS ▸ <b>{s['users']:,}</b>\n"
+        f"📁 FILES ▸ <b>{s['files']:,}</b>\n"
+        f"🔗 LINKS ▸ <b>{s['links']:,}</b>\n"
+        f"🚫 BANNED ▸ <b>{s['banned']:,}</b>\n"
+        f"💤 BLOCKED ▸ <b>{s['blocked']:,}</b>\n\n"
         + mongo_text(m),
         M([
-            [B("🍃 MongoDB details", "adm:mongo")],
-            [B("🔄 Refresh", "adm:stats")],
-            [B("🔙 Back", "adm:home")],
+            [K.ub("🍃 MongoDB", "adm:mongo"), K.ub("🔄 Refresh", "adm:stats")],
+            [K.ub("🔙 Back", "adm:home")],
         ]),
     )
 
@@ -1150,7 +1105,7 @@ async def a_stats(update, context, args):
 async def a_mongo(update, context, args):
     m = await db.mongo_status()
     await show(update, mongo_text(m, detail=True),
-               M([[B("🔄 Refresh", "adm:mongo")], [B("🔙 Back", "adm:stats")]]))
+               M([[K.ub("🔄 Refresh", "adm:mongo"), K.ub("🔙 Back", "adm:stats")]]))
 
 
 @action("ban")
@@ -1266,75 +1221,87 @@ async def a_ads(update, context, args):
 
     if a == "t":
         if not S.get("ads_enabled") and not ads.zone():
-            note = "⚠️ Set the Zone ID first.\n\n"
+            note = "⚠️ SET THE ZONE ID FIRST.\n\n"
         else:
             await S.set("ads_enabled", not S.get("ads_enabled"))
-            note = "✅ Updated.\n\n"
     elif a == "pb":
         await S.set("ads_postback", not S.get("ads_postback"))
-        note = "✅ Updated.\n\n"
     elif a == "ab":
         await S.set("ads_block_adblock", not S.get("ads_block_adblock"))
-        note = "✅ Updated.\n\n"
     elif a == "tst":
         await S.set("ads_admin_test", not S.get("ads_admin_test"))
-        note = "✅ Updated.\n\n"
     elif a == "newsec":
         await S.set("ads_secret", "")
         await ads.ensure_secret()
-        note = "🔑 New secret created. Paste the NEW postback URL in Monetag.\n\n"
+        await show_postback(update, "🔑 NEW SECRET CREATED. PASTE THE NEW URL IN MONETAG.\n\n")
+        return
+    elif a == "pburl":
+        await show_postback(update)
+        return
+    elif a == "stat":
+        await show_ads_stats(update)
+        return
     elif a == "zone":
         await ask(update, context, "ads_zone",
-                  "📺 <b>Monetag Zone ID</b>\n\nSend your main <b>SDK zone ID</b> (digits only), "
-                  "the number in <code>data-zone=\"123456\"</code> of your Monetag Telegram Mini App code.")
+                  f"✏️ <b>ZONE ID</b>\n\nNOW: <code>{html.escape(ads.zone()) or 'NOT SET'}</code>\n\n"
+                  "SEND YOUR MAIN <b>SDK ZONE ID</b> (DIGITS ONLY).")
         return
     elif a == "sdk":
         await ask(update, context, "ads_sdk",
-                  "🔗 <b>SDK script URL</b>\n\nSend the <code>src</code> of the script tag from your Monetag code, "
-                  f"e.g. <code>{html.escape(S.get('ads_sdk_url'))}</code>")
+                  f"🔗 <b>SDK URL</b>\n\nNOW: <code>{html.escape(ads.sdk_url())}</code>\n\n"
+                  "SEND THE <code>src</code> OF THE SCRIPT TAG FROM YOUR MONETAG CODE.")
         return
 
     on = S.get("ads_enabled")
-    st = await ads.get_stats()
-    pb_url = await ads.postback_url()
     warn = ""
     if not ads.mini_app_ready():
-        warn += "⚠️ <b>BASE_URL</b> must be a public https URL, otherwise ads are skipped.\n"
+        warn += "\n⚠️ BASE_URL MUST BE A PUBLIC HTTPS URL."
     if not ads.zone():
-        warn += "⚠️ Zone ID is not set.\n"
+        warn += "\n⚠️ ZONE ID IS NOT SET."
     if on and S.get("ads_postback") and not S.get("ads_last_postback"):
-        warn += "⚠️ No postback received yet: paste the Postback URL below in Monetag.\n"
+        warn += "\n⚠️ NO POSTBACK YET. PASTE THE URL IN MONETAG."
     if not S.get("ads_postback"):
-        warn += "⚠️ Server verification is OFF: an ad can be faked from the client. Keep it ON.\n"
+        warn += "\n⚠️ SERVER VERIFY IS OFF. KEEP IT ON."
+
+    def st(key):
+        return "ON" if S.get(key) else "OFF"
 
     await show(
         update,
-        f"{note}📺 <b>Ads (Monetag Mini App)</b>\n\n"
-        f"Status: {'ON ✅' if on else 'OFF'}\n"
-        f"Zone ID: <code>{html.escape(ads.zone()) or '— not set —'}</code>\n"
-        f"SDK URL: <code>{html.escape(ads.sdk_url())}</code>\n"
-        f"Server verification (postback): {'ON ✅' if S.get('ads_postback') else 'OFF ⚠️'} "
-        f"· last postback: {_ago(S.get('ads_last_postback'))}\n"
-        f"Test as admin (ads shown to admins too): {'ON ✅' if S.get('ads_admin_test') else 'OFF'}\n"
-        f"AdBlock / DNS blocker check: {'ON ✅' if S.get('ads_block_adblock') else 'OFF'}\n"
-        f"No-fill tries before free files: {S.get('ads_tries')} "
-        f"(max {ads.FALLBACK_DAILY} such fallbacks per user per day)\n\n"
-        f"📈 Ads verified: {st.get('verified', 0)} · Fallback: {st.get('fallback', 0)} · "
-        f"Blocked: {st.get('blocked', 0)}\n\n"
-        f"{warn}\n"
-        "<b>Postback URL</b> (Monetag → your SDK zone → Postback URL):\n"
-        f"<code>{html.escape(pb_url)}</code>\n\n"
-        "Also add this app URL in Monetag → Telegram Mini App:\n"
-        f"<code>{html.escape(config.BASE_URL or '— BASE_URL not set —')}</code>",
+        f"{note}📺 <b>ADS</b>\n\nSELECT AN OPTION TO MANAGE ADS." + warn,
         M([
-            [B("🔕 Turn OFF" if on else "🔔 Turn ON", "adm:ads:t")],
-            [B("✏️ Zone ID", "adm:ads:zone"), B("🔗 SDK URL", "adm:ads:sdk")],
-            [B("🛰 Server verify: " + ("ON" if S.get("ads_postback") else "OFF"), "adm:ads:pb")],
-            [B("🛡 AdBlock check: " + ("ON" if S.get("ads_block_adblock") else "OFF"), "adm:ads:ab")],
-            [B("🧪 Test as admin: " + ("ON" if S.get("ads_admin_test") else "OFF"), "adm:ads:tst")],
-            [B("🔑 New postback secret", "adm:ads:newsec")],
-            [B("🔙 Back", "adm:home")],
+            [K.ub("🔕 Turn OFF" if on else "🔔 Turn ON", "adm:ads:t")],
+            [K.ub("✏️ Zone ID", "adm:ads:zone"), K.ub("🔗 SDK URL", "adm:ads:sdk")],
+            [K.ub(f"🛰 Verify: {st('ads_postback')}", "adm:ads:pb"), K.ub(f"🛡 AdBlock: {st('ads_block_adblock')}", "adm:ads:ab")],
+            [K.ub(f"🧪 Test: {st('ads_admin_test')}", "adm:ads:tst"), K.ub("🔑 New Secret", "adm:ads:newsec")],
+            [K.ub("📡 Postback URL", "adm:ads:pburl"), K.ub("📈 Ad Stats", "adm:ads:stat")],
+            [K.ub("🔙 Back", "adm:monet")],
         ]),
+    )
+
+
+async def show_postback(update, note: str = ""):
+    await show(
+        update,
+        f"{note}📡 <b>POSTBACK URL</b>\n\nMONETAG → SDK ZONE → POSTBACK URL:\n"
+        f"<code>{html.escape(await ads.postback_url())}</code>\n\n"
+        "MONETAG → TELEGRAM MINI APP URL:\n"
+        f"<code>{html.escape(config.BASE_URL or 'BASE_URL NOT SET')}</code>",
+        M([[K.ub("🔑 New Secret", "adm:ads:newsec"), K.ub("🔙 Back", "adm:ads")]]),
+    )
+
+
+async def show_ads_stats(update):
+    st = await ads.get_stats()
+    await show(
+        update,
+        "📈 <b>AD STATS</b>\n\n"
+        f"✅ VERIFIED ▸ <b>{st.get('verified', 0)}</b>\n"
+        f"🎁 FREE FILES ▸ <b>{st.get('fallback', 0)}</b>\n"
+        f"🚫 BLOCKED ▸ <b>{st.get('blocked', 0)}</b>\n\n"
+        f"🛰 LAST POSTBACK ▸ <b>{_ago(S.get('ads_last_postback')).upper()}</b>\n"
+        f"🔁 NO-FILL TRIES ▸ <b>{S.get('ads_tries')}</b> (MAX {ads.FALLBACK_DAILY} / USER / DAY)",
+        M([[K.ub("🔄 Refresh", "adm:ads:stat"), K.ub("🔙 Back", "adm:ads")]]),
     )
 
 
@@ -1343,11 +1310,11 @@ async def st_ads_zone(update, context):
     msg = update.effective_message
     z = (msg.text or "").strip()
     if not re.fullmatch(r"\d{3,14}", z):
-        await msg.reply_text("⚠️ Send the zone ID as digits only.", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ SEND THE ZONE ID AS DIGITS ONLY.", reply_markup=K.cancel())
         return
     await S.set("ads_zone", z)
     context.user_data.pop("state", None)
-    await msg.reply_text(f"✅ Zone ID saved: <code>{z}</code>", reply_markup=K.back("ads"))
+    await msg.reply_text(f"✅ ZONE ID SAVED: <code>{z}</code>", reply_markup=K.back("ads"))
 
 
 @state("ads_sdk")
@@ -1357,11 +1324,11 @@ async def st_ads_sdk(update, context):
     if u.startswith("//"):
         u = "https:" + u
     if not re.fullmatch(r"https://[^\s'\"<>]+", u):
-        await msg.reply_text("⚠️ Send a valid https URL.", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ SEND A VALID HTTPS URL.", reply_markup=K.cancel())
         return
     await S.set("ads_sdk_url", u)
     context.user_data.pop("state", None)
-    await msg.reply_text("✅ SDK URL saved.", reply_markup=K.back("ads"))
+    await msg.reply_text("✅ SDK URL SAVED.", reply_markup=K.back("ads"))
 
 
 # ===================================================================== batch + links

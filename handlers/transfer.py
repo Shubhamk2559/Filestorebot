@@ -19,12 +19,19 @@ import re
 
 from telegram import InlineKeyboardMarkup as M
 
-from handlers.admin import B, action, ask, show, state
+from handlers.admin import B as _B, action, ask, show, state
 from utils import keyboards as K
 from utils import transfer as T
 from utils.helpers import owner_only
 
 log = logging.getLogger(__name__)
+
+
+def B(text, data):
+    """Panel button style: CAPS label."""
+    return _B(text.upper(), data)
+
+
 PER_PAGE = 8
 _watchers: dict = {}
 
@@ -63,33 +70,23 @@ async def _wipe(update):
 async def a_tr(update, context, args):
     bad = T.available()
     if bad:
-        await show(update, f"🔄 <b>Transfer</b>\n\n⚠️ {_esc(bad)}", K.back())
+        await show(update, f"🔄 <b>TRANSFER</b>\n\n⚠️ {_esc(bad)}", K.back("servers"))
         return
     client = await T.session.ensure()
     job = T.CURRENT
-    rows = []
     if client:
         me = T.session.me
-        head = f"✅ Logged in as <b>{_esc(me.first_name or '')}</b> {('@' + _esc(me.username)) if me.username else ''}"
-        rows.append([B("🚀 New transfer", "adm:trnew")])
+        who = f"{_esc(me.first_name or '')} {('@' + _esc(me.username)) if me.username else ''}".strip()
+        line = f"✅ LOGGED IN ▸ <b>{who}</b>"
+        rows = [[B("🚀 New Transfer", "adm:trnew"), B("🗑 Cleanup", "adm:trcl")]]
         if job:
-            rows.append([B("📊 Current / last job", "adm:trjob")])
-        rows.append([B("🗑 Delete copied files / wipe a chat", "adm:trcl")])
+            rows.append([B("📊 Current Job", "adm:trjob")])
         rows.append([B("🚪 Logout", "adm:trout")])
     else:
-        head = "❌ Not logged in"
-        rows.append([B("📱 Login with phone", "adm:trlogin")])
-        rows.append([B("🔑 Paste session string", "adm:trsess")])
-    rows.append([B("🔙 Back", "adm:home")])
-    await show(
-        update,
-        "🔄 <b>Transfer</b>\n\n"
-        "Copy everything from a private channel / chat into another channel, chat or Saved Messages - "
-        "same files, same captions, <b>no forward tag</b>.\n\n"
-        f"{head}\n\n"
-        "<i>Runs on Telegram's servers: nothing is downloaded to the VPS, 3000 videos take only a few minutes.</i>",
-        M(rows),
-    )
+        line = "❌ NOT LOGGED IN"
+        rows = [[B("📱 Phone Login", "adm:trlogin"), B("🔑 Session", "adm:trsess")]]
+    rows.append([B("🔙 Back", "adm:servers")])
+    await show(update, f"🔄 <b>TRANSFER</b>\n\nCOPY FILES BETWEEN CHATS, NO FORWARD TAG.\n\n{line}", M(rows))
 
 
 # ===================================================================== login
@@ -227,7 +224,7 @@ def _page(items: list, page: int, pick: str, nav: str, extra: list):
     rows = list(extra)
     for i in range(page * PER_PAGE, min(len(items), (page + 1) * PER_PAGE)):
         _id, title, icon = items[i]
-        rows.append([B(f"{icon} {_short(title)}", f"adm:{pick}:{i}")])
+        rows.append([_B(f"{icon} {_short(title)}", f"adm:{pick}:{i}")])
     if n > 1:
         nav_row = []
         if page > 0:
@@ -691,7 +688,7 @@ async def a_trcl(update, context, args):
     context.user_data["tr_cl"] = items
     rows = []
     for i, d in enumerate(items):
-        rows.append([B(f"🗑 {_short(d['dst_title'], 24)} · {d['n']} files", f"adm:trclsel:{i}")])
+        rows.append([_B(f"🗑 {_short(d['dst_title'], 24)} · {d['n']} files", f"adm:trclsel:{i}")])
     rows.append([B("🧹 Wipe a whole chat…", "adm:trwp")])
     rows.append([B("🔙 Back", "adm:tr")])
     await show(update,
