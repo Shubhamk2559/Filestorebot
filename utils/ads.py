@@ -409,6 +409,23 @@ def _price(raw) -> float:
     return v if math.isfinite(v) and 0 < v < 1000 else 0.0
 
 
+DUP_WINDOW = 30   # seconds: an identical postback inside this window is a retry, not a new ad (an ad takes > MIN_AD_SECONDS)
+
+
+async def _is_duplicate(q) -> bool:
+    key = hashlib.sha1("|".join(q.get(k, "") for k in (
+        "ymid", "zone_id", "sub_zone_id", "event_type", "reward_event_type", "telegram_id", "estimated_price"
+    )).encode()).hexdigest()
+    now = time.time()
+    try:
+        old = await db.pb_col.find_one_and_update(
+            {"_id": key}, {"$set": {"t": now, "expire_at": dt.datetime.utcfromtimestamp(now + 300)}},
+            upsert=True)                                   # returns the previous doc (None if new)
+    except Exception:
+        return False
+    return bool(old) and now - (old.get("t") or 0) < DUP_WINDOW
+
+
 async def postback(request):
     q = request.query
     if not hmac.compare_digest(q.get("secret", ""), S.get("ads_secret") or secrets.token_hex(8)):
@@ -418,13 +435,15 @@ async def postback(request):
         await S.set("ads_last_postback", time.time())
     ev_type = q.get("event_type")
     if ev_type in ("impression", "click"):                 # Analytics: ads shown, clicks and Monetag's estimated revenue
+        if await _is_duplicate(q):                         # Monetag retries / double-sends -> count once
+            return web.Response(text="ok")
         inc = {"imp" if ev_type == "impression" else "clk": 1}
         price = _price(q.get("estimated_price"))
-        if price:
+        if price and ev_type == "impression":              # revenue only on the impression, never again on its click
             inc["rev"] = price
         if ev_type == "impression" and q.get("reward_event_type") == "valued":
             inc["valued"] = 1
-        await db.stat_inc(**inc)
+        await db.earn_inc(**inc)                           # UTC day, like Monetag
     if q.get("event_type") in ("impression", "click") and re.fullmatch(r"[0-9a-f]{24}", sid):
         s = await db.ads_col.find_one({"_id": sid})
         tid = q.get("telegram_id", "")
