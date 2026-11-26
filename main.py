@@ -24,7 +24,8 @@ from handlers import backup as _backup          # noqa: F401  registers the Back
 from handlers import analytics as _analytics    # noqa: F401  registers the Earnings / Analytics screens
 from handlers import transfer as _transfer      # noqa: F401  registers the Transfer screens (user-account channel copy)
 from handlers import usage as _usage            # noqa: F401  registers the VPS Usage / Plan advice screens
-from handlers import contact                    # users can message the owner through the bot
+from handlers import contact                    # users can message the owner through the bot (fallback)
+from handlers import support                    # Support Bot: second bot, one forum topic per user
 from utils.backup import backup_loop
 from utils import padding
 from utils import chats as _chats
@@ -50,6 +51,7 @@ async def post_init(app):
     app.bot_data["bt"] = asyncio.create_task(batch_loop(app.bot))        # Vault Pack worker (imgbb / Telegraph, resumable)
     app.bot_data["bk"] = asyncio.create_task(backup_loop(app.bot))      # daily auto-backup to the owner
     app.bot_data["us"] = asyncio.create_task(usage_loop())              # VPS usage sampler (CPU / RAM / bandwidth)
+    app.bot_data["sup"] = asyncio.create_task(support.runtime.boot(app.bot))   # reconnect the Support Bot
     app.bot_data["reg"] = asyncio.create_task(register_bot(app.bot.username))   # links -> this bot (Cloudflare Worker)
     log.info("Bot @%s started (web on :%s, streaming %s)", app.bot.username, config.PORT,
              "ON" if streamer.ready else f"OFF ({streamer.error})")
@@ -58,10 +60,11 @@ async def post_init(app):
 
 
 async def post_shutdown(app):
+    await support.runtime.stop()
     await streamer.stop()
     from utils.transfer import session as _tr_session
     await _tr_session.stop()
-    for key in ("gc", "ap", "bt", "bk", "us"):
+    for key in ("gc", "ap", "bt", "bk", "us", "sup"):
         task = app.bot_data.get(key)
         if task:
             task.cancel()

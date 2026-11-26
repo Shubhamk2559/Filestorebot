@@ -63,6 +63,29 @@ Put your own reverse proxy (nginx/Caddy, `proxy_buffering off`) in front of port
 - **Stats** - users, files, links, banned, blocked. **Ban/Unban** - forward a message or send an ID.
 - **Admins** (owner only) - add/remove by forwarded message or ID. **Reset** - defaults (keeps admins + DB channel).
 
+## 🛟 Support Bot (one topic per user)
+A **second bot** (its own token) that runs inside this same process. Users write to it, the owner answers in a
+Telegram **forum group** where **every user has his own topic** - nothing gets mixed, the old chat never scrolls away.
+
+**Setup (owner, 2 minutes):**
+1. @BotFather -> `/newbot` (a NEW bot, not the file bot).
+2. Panel -> **Settings -> 🛟 Support -> Connect Bot** -> send the token (your message is deleted right away).
+3. Create a Telegram group -> turn **Topics ON** -> add the Support Bot as **admin with "Manage Topics"**. It is detected automatically
+   (or pick it under Support -> Group). Always turn Topics on *before* adding the bot (turning it on later changes the group id).
+
+**How you use it:** open the group, tap a topic, type your answer. That is all.
+- Topic title: `🔴 name · id` = user waiting · `🟢` = you answered · `✅` = closed.
+- First message of a topic = info card (name, @username, ID, ticket no., **which link/post he came from**) with **Ban** / **Close Ticket**.
+- A message starting with `#` is a **private note** (not sent to the user). Don't post as "anonymous admin" (the bot can't see who you are).
+- User writes after you closed the ticket -> the topic is reopened automatically.
+- Without a group the bot works in **DM mode** (fallback): messages come to your private chat with the Support Bot - use Reply on them.
+
+**Where users see the Support button** (only while the Support Bot is connected + ON):
+start / join screen, after every file delivery (next to the daily-limit line, with the link as context), Invalid Link, Files Unavailable,
+Daily Limit, Verified, the Monetag ad screen, **channel posts of the Autoposter** (Settings -> Support -> *Posts* ON/OFF, text editable
+with *Button Text*), and the landing page. `https://<your-domain>/support` always redirects to the current Support Bot.
+If a user types to the *file* bot, he is pointed to the Support Bot instead of mixing into your chat.
+
 ## 5. Behaviour notes
 - **Daily limit = 10 links per user** (1 link = 1 count, every file inside the link is delivered). 5 second cooldown between two link opens. Admins are exempt.
 - Users get files **only** via `t.me/<bot>?start=<token>`; tokens are random, stored in MongoDB.
