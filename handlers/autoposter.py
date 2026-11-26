@@ -29,7 +29,7 @@ from utils import autoposter as AP
 from utils import batch as BT
 from utils import keyboards as K
 from utils.keyboards import nm, pager, ub as U
-from utils.ui import ago
+from utils.ui import ago, styled
 from utils.links import share_link
 from utils.mtproto import mtproto
 
@@ -269,7 +269,7 @@ async def a_apcbr(update, context, args):
 
 
 async def _saved(msg, cid: int, text: str):
-    await msg.reply_text(text, reply_markup=K.back(f"apcb:{cid}"))
+    await msg.reply_text(styled(text), reply_markup=K.back(f"apcb:{cid}"))
 
 
 @action("apcap")
@@ -844,7 +844,7 @@ async def _run_range_batch(bot, src, first: int, last: int, cid: int, by: int, s
 
 # ---- (b) collect mode: the admin sends / forwards the files to the bot
 def _collect_text(n: int) -> str:
-    return f"📥 <b>COLLECTING FILES</b>\n\n{n} FILE(S) RECEIVED.\nSEND THEM IN ORDER, THEN TAP DONE."
+    return styled(f"📥 <b>COLLECTING FILES</b>\n\n{n} FILE(S) RECEIVED.\nSEND THEM IN ORDER, THEN TAP DONE.")
 
 
 def _collect_kb():
