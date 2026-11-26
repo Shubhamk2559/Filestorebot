@@ -7,11 +7,9 @@ The ONLY typed command: /start.
 Also: the "✅ I've Joined" / "Verify" callback and the file delivery routine.
 """
 import asyncio
-import html
 import logging
 import time
 
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from telegram.ext import ContextTypes
@@ -21,6 +19,8 @@ from database.db import settings as S
 from handlers import admin
 from utils.helpers import call, is_admin, notify_owner, render_caption, retry_seconds
 from utils import ads
+from utils.keyboards import grid, kb, link as url_btn, ub
+from utils.ui import esc, head
 from utils.membership import get_missing
 from utils.streamer import human_size, streamer
 import config
@@ -39,7 +39,7 @@ async def start_cmd(update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()  # drop any half-finished admin prompt
 
     if banned and not is_admin(user.id):
-        await msg.reply_text("🚫 You are banned from using this bot.")
+        await msg.reply_text(head("🚫", "Banned", "YOU CANNOT USE THIS BOT."))
         return
 
     token = context.args[0] if context.args else ""
@@ -58,7 +58,7 @@ async def handle_token(context, user, chat_id: int, token: str):
     else:                  # link lookup and channel-membership check run in parallel (faster first response)
         link, missing = await asyncio.gather(db.get_link(token), get_missing(context.bot, user.id))
     if not link:
-        await call(context.bot.send_message, chat_id, "❌ This link is invalid or has been revoked.")
+        await call(context.bot.send_message, chat_id, head("❌", "Invalid Link", "THIS LINK IS WRONG OR REVOKED."))
         return
     if missing:
         await send_gate(context, user, chat_id, token, missing)
@@ -72,29 +72,21 @@ async def send_gate(context, user, chat_id: int, token: str = "", missing=None):
     channels = []
     if S.get("fsub_enabled"):
         channels = missing if missing is not None else S.get("fsub_channels")
-    rows, row = [], []
-    for ch in channels:
-        row.append(B(f"📢 {ch['title'][:28]}", url=ch["link"]))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    for custom_row in S.get("custom_buttons"):
-        rows.append([B(t, url=u) for t, u in custom_row])
-    rows.append([B("✅ I've Joined" if token else "🔄 Try Again / Verify", callback_data=f"chk:{token}")])
+    rows = grid([url_btn(f"📢 {ch['title'][:28]}", ch["link"], raw=True) for ch in channels])
+    rows += [[url_btn(t, u, raw=True) for t, u in custom_row] for custom_row in S.get("custom_buttons")]
+    rows.append([ub("✅ Verify" if token else "🔄 Verify", f"chk:{token}")])
 
     caption = render_caption(S.get("start_caption"), user)
-    kb = M(rows)
+    markup = kb(rows)
     image = S.get("start_image")
     if image:
         try:
             await call(context.bot.send_photo, chat_id, image, caption=caption,
-                       reply_markup=kb, parse_mode=ParseMode.HTML)
+                       reply_markup=markup, parse_mode=ParseMode.HTML)
             return
         except BadRequest as e:  # bad file_id / caption too long -> fall back to text
             log.warning("Start image failed: %s", e)
-    await call(context.bot.send_message, chat_id, caption, reply_markup=kb,
+    await call(context.bot.send_message, chat_id, caption, reply_markup=markup,
                parse_mode=ParseMode.HTML)
 
 
@@ -106,11 +98,11 @@ async def check_callback(update, context):
     if not is_admin(user.id):
         banned, missing = await asyncio.gather(db.is_banned(user.id), get_missing(context.bot, user.id))
         if banned:
-            await q.answer("🚫 You are banned from using this bot.", show_alert=True)
+            await q.answer("🚫 YOU ARE BANNED.", show_alert=True)
             return
         if missing:
             names = ", ".join(c["title"] for c in missing)[:150]
-            await q.answer(f"❌ Please join first: {names}", show_alert=True)
+            await q.answer(f"❌ JOIN FIRST ▸ {names}", show_alert=True)
             return
     await q.answer()
     if token:
@@ -121,11 +113,11 @@ async def check_callback(update, context):
         pass
     if not token:
         await call(context.bot.send_message, q.message.chat_id,
-                   f"✅ Verified! Now open a file link to receive your files.\n\n📊 Daily limit: {db.limit_value()} links per user per day (each link gives all its files).")
+                   head("✅", "Verified", f"OPEN A FILE LINK TO GET YOUR FILES.\n\n📊 LIMIT ▸ <b>{db.limit_value()}</b> LINKS PER DAY"))
         return
     link = await link_task
     if not link:
-        await call(context.bot.send_message, q.message.chat_id, "❌ This link is invalid or has been revoked.")
+        await call(context.bot.send_message, q.message.chat_id, head("❌", "Invalid Link", "THIS LINK IS WRONG OR REVOKED."))
         return
     await request_access(context.bot, q.message.chat_id, link)
 
@@ -168,8 +160,7 @@ def _caption_override():
 
 async def _limit_reached(bot, chat_id: int):
     await call(bot.send_message, chat_id,
-               f"🚫 <b>Daily limit reached</b>\n\nYou can open only <b>{db.limit_value()}</b> links per day. "
-               "Please come back tomorrow (resets at 12:00 AM IST).", parse_mode=ParseMode.HTML)
+               head("🚫", "Daily Limit Reached", f"ONLY <b>{db.limit_value()}</b> LINKS PER DAY.\nCOME BACK TOMORROW (RESETS 12:00 AM IST)."), parse_mode=ParseMode.HTML)
 
 
 async def request_access(bot, chat_id: int, link: dict):
@@ -179,7 +170,7 @@ async def request_access(bot, chat_id: int, link: dict):
         wait = COOLDOWN_SECONDS - (time.monotonic() - _last_open.get(chat_id, 0.0))
         if wait > 0:
             await call(bot.send_message, chat_id,
-                       f"⏳ Please wait <b>{int(wait) + 1}</b> second(s) before opening the next link.",
+                       head("⏳", "Please Wait", f"NEXT LINK IN <b>{int(wait) + 1}</b> SEC."),
                        parse_mode=ParseMode.HTML)
             return
         _last_open[chat_id] = time.monotonic()
@@ -215,9 +206,9 @@ async def deliver(bot, chat_id: int, link: dict):
         used = max(0, used - 1)
     _last_open[chat_id] = time.monotonic()             # cooldown starts after delivery finishes
 
-    text = f"📊 <b>Daily limit:</b> {used}/{limit} links used today · {max(0, limit - used)} left"
+    text = f"📊 LIMIT ▸ <b>{used}/{limit}</b> USED · <b>{max(0, limit - used)}</b> LEFT"
     if used >= limit:
-        text += "\n\n🚫 Limit reached. Come back tomorrow (resets at 12:00 AM IST)."
+        text += "\n🚫 LIMIT REACHED. RESETS 12:00 AM IST."
     await call(bot.send_message, chat_id, text, parse_mode=ParseMode.HTML)
 
 
@@ -226,7 +217,7 @@ async def _deliver(bot, chat_id: int, link: dict) -> int:
     Returns how many files the user actually received."""
     channel = S.get("db_channel")
     if not channel:
-        await call(bot.send_message, chat_id, "⚠️ The bot is not set up yet. Please try again later.")
+        await call(bot.send_message, chat_id, head("⚠️", "Not Ready", "THE BOT IS NOT SET UP YET. TRY AGAIN LATER."))
         return 0
     if S.get("delivery_mode") == "stream" and not link.get("no_ads"):     # a free preview image is always sent as the photo
         if streamer.ready:
@@ -235,8 +226,7 @@ async def _deliver(bot, chat_id: int, link: dict) -> int:
                 return n
         else:  # admin chose streaming but the engine is down: don't leave users empty-handed
             await notify_owner(bot, "stream_down",
-                               f"⚠️ Streaming engine is off ({streamer.error}). "
-                               "Files are being forwarded instead.")
+                               head("⚠️", "Streaming Off", f"<code>{esc(streamer.error)}</code>\nFILES ARE BEING FORWARDED INSTEAD."))
     return await deliver_forward(bot, chat_id, link, channel)
 
 
@@ -280,14 +270,13 @@ async def deliver_forward(bot, chat_id: int, link: dict, channel: dict) -> int:
         try:
             notice = await call(
                 bot.send_message, chat_id,
-                f"⏳ These files will be deleted in <b>{minutes} minute{'s' if minutes != 1 else ''}</b>. "
-                "Please save them before then.", parse_mode=ParseMode.HTML)
+                head("⏳", "Auto-Delete", f"FILES VANISH IN <b>{minutes} MIN</b>. SAVE THEM BEFORE THEN."), parse_mode=ParseMode.HTML)
             sent.append(notice.message_id)
         except TelegramError:
             pass
         await db.schedule_delete(chat_id, sent, minutes)
     if skipped:
-        await call(bot.send_message, chat_id, f"ℹ️ {skipped} file(s) are no longer available.")
+        await call(bot.send_message, chat_id, f"ℹ️ <b>{skipped}</b> FILE(S) NO LONGER AVAILABLE.")
     return files
 
 
@@ -318,16 +307,16 @@ async def deliver_stream(bot, chat_id: int, link: dict, channel: dict):
         for n, f in enumerate(page, start=p + 1):
             url = f"{config.BASE_URL}/dl/{token}/{f.msg_id}"
             icon = "🎬" if f.mime.startswith("video/") else "🎵" if f.mime.startswith("audio/") else "📄"
-            lines.append(f"{icon} <b>{html.escape(f.name[:80])}</b>\n💾 {human_size(f.size)}")
+            lines.append(f"{icon} <b>{esc(f.name[:80])}</b>\n💾 {human_size(f.size)}")
             row = []
             if f.streamable:
-                row.append(B(f"▶️ Stream{f' {n}' if len(files) > 1 else ''}", url=url))
-            row.append(B(f"⬇️ Download{f' {n}' if len(files) > 1 else ''}", url=url + "?d=1"))
+                row.append(url_btn(f"▶️ Stream{f' {n}' if len(files) > 1 else ''}", url))
+            row.append(url_btn(f"⬇️ Download{f' {n}' if len(files) > 1 else ''}", url + "?d=1"))
             rows.append(row)
-        head = "" if len(files) == 1 else f"📦 <b>{len(files)} files</b>\n\n"
+        top = "" if len(files) == 1 else head("📦", f"{len(files)} Files") + "\n\n"
         try:
-            m = await call(bot.send_message, chat_id, head + "\n\n".join(lines),
-                           reply_markup=M(rows), parse_mode=ParseMode.HTML)
+            m = await call(bot.send_message, chat_id, top + "\n\n".join(lines),
+                           reply_markup=kb(rows), parse_mode=ParseMode.HTML)
             sent.append(m.message_id)
         except Forbidden as e:
             if any(w in str(e).lower() for w in USER_GONE):
@@ -342,13 +331,13 @@ async def deliver_stream(bot, chat_id: int, link: dict, channel: dict):
     if minutes:
         await db.schedule_delete(chat_id, sent, minutes)
     if len(files) < len(ids):
-        await call(bot.send_message, chat_id, f"ℹ️ {len(ids) - len(files)} file(s) are no longer available.")
+        await call(bot.send_message, chat_id, f"ℹ️ <b>{len(ids) - len(files)}</b> FILE(S) NO LONGER AVAILABLE.")
     return len(files)
 
 
 async def _unavailable(bot, chat_id):
     try:
-        await bot.send_message(chat_id, "⚠️ Files are temporarily unavailable. Please try again later.")
+        await bot.send_message(chat_id, head("⚠️", "Files Unavailable", "TRY AGAIN LATER."))
     except TelegramError:
         pass
 
@@ -356,5 +345,5 @@ async def _unavailable(bot, chat_id):
 async def _config_problem(bot, channel, err):
     await notify_owner(
         bot, "dbch",
-        f"⚠️ Unable to read the Database Channel \"{channel.get('title')}\": {err}\n"
-        "Make sure the bot is an admin there, or set the channel again.")
+        head("⚠️", "Database Channel Error", f"<b>{esc(channel.get('title'))}</b>\n<code>{esc(err)}</code>\n\n"
+             "MAKE SURE THE BOT IS ADMIN THERE, OR SET THE CHANNEL AGAIN."))

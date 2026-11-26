@@ -2,28 +2,27 @@
 handlers/backup.py
 Backup / Restore screen of the admin panel (owner only) + the receiver for backup files.
 
-  Panel -> 💾 Backup / Restore
-      📥 Backup now         sends the backup file(s) to this chat
-      🔁 Auto-backup        one file every 24 h to the owner's chat
-      📤 Restore            send a backup file -> choose  Replace everything / Merge
+  Panel -> 💾 Backup
+      📥 Backup Now       sends the backup file(s) to this chat
+      🔁 Auto-Backup      one file every 24 h to the owner's chat
+      📤 Restore          send a backup file -> Replace everything / Merge
 
 A backup file sent to the bot by the owner is recognised by its name (fsb-backup-*.json.gz) at any time,
 so on a brand-new bot it is enough to send the file.
 """
 import asyncio
-import html
 import logging
-import time
 
-from telegram import InlineKeyboardMarkup as M
 from telegram.ext import filters
 
 import config
 from database.db import settings as S
-from handlers.admin import B, action, ask, show, state
+from handlers.admin import action, ask, show, state, warn
 from utils import backup as BK
 from utils import keyboards as K
 from utils.helpers import owner_only
+from utils.keyboards import grid, kb, ub
+from utils.ui import ago, esc, head, onoff
 
 log = logging.getLogger(__name__)
 TG_DOWNLOAD_LIMIT = 20 * 1024 * 1024
@@ -38,11 +37,8 @@ class BackupDocFilter(filters.MessageFilter):
         return bool(d and u and u.id == config.OWNER_ID and BK.is_backup_name(d.file_name))
 
 
-def _ago(ts) -> str:
-    if not ts:
-        return "never"
-    d = int(time.time() - ts)
-    return f"{d // 60} min ago" if d < 5400 else f"{d // 3600} h ago" if d < 172800 else f"{d // 86400} days ago"
+def _parts(cur):
+    return [cur["parts"][k] for k in sorted(cur["parts"])]
 
 
 # ===================================================================== main screen
@@ -50,20 +46,12 @@ def _ago(ts) -> str:
 @owner_only
 async def a_bk(update, context, args):
     on = S.get("auto_backup")
-    await show(
-        update,
-        "💾 <b>Backup / Restore</b>\n\n"
-        "Settings, links, files, users and Autoposter in one file.\n\n"
-        f"Last backup: <b>{_ago(S.get('bk_last'))}</b>\n"
-        f"Auto-backup (every 24 h): <b>{'ON' if on else 'OFF'}</b>\n\n"
-        "To restore, send a backup file to this chat.",
-        M([
-            [B("📥 Backup now", "adm:bknow")],
-            [B(f"🔁 Auto-backup: {'ON' if on else 'OFF'}", "adm:bkauto")],
-            [B("📤 Restore", "adm:bkrestore")],
-            [B("🔙 Back", "adm:home")],
-        ]),
-    )
+    await show(update,
+               head("💾", "Backup", "SETTINGS, LINKS, FILES, USERS AND AUTOPOSTER IN ONE FILE.\n\n"
+                                    f"LAST BACKUP ▸ <b>{ago(S.get('bk_last'))}</b>\n"
+                                    f"AUTO-BACKUP ▸ <b>{onoff(on)}</b> (EVERY 24 H)"),
+               kb(grid([("📥 Backup Now", "adm:bknow"), ("📤 Restore", "adm:bkrestore"),
+                        (f"🔁 Auto-Backup: {onoff(on)}", "adm:bkauto")]), ub("🔙 Back", "adm:home")))
 
 
 @action("bkauto")
@@ -76,20 +64,17 @@ async def a_bkauto(update, context, args):
 @action("bknow")
 @owner_only
 async def a_bknow(update, context, args):
-    await show(update, "⏳ Creating backup…")
+    await show(update, "⏳ CREATING BACKUP…")
     try:
         counts = await BK.send_backup(context.bot, update.effective_chat.id)
     except Exception as e:
         log.exception("Backup failed")
-        await show(update, f"⚠️ Backup failed: <code>{html.escape(str(e))}</code>", K.back("bk"))
+        await show(update, f"⚠️ BACKUP FAILED ▸ <code>{esc(e)}</code>", K.back("bk"))
         return
-    await show(
-        update,
-        "✅ <b>Backup sent</b>\n\n"
-        f"👥 {counts['users']} users · 🔗 {counts['links']} links · 📁 {counts['files']} files\n\n"
-        "Keep the file safe (forward it to Saved Messages).",
-        K.back("bk"),
-    )
+    await show(update,
+               head("✅", "Backup Sent", f"👥 <b>{counts['users']}</b> USERS · 🔗 <b>{counts['links']}</b> LINKS · "
+                                         f"📁 <b>{counts['files']}</b> FILES\n\nKEEP THE FILE SAFE."),
+               K.back("bk"))
 
 
 @action("bkrestore")
@@ -97,8 +82,8 @@ async def a_bknow(update, context, args):
 async def a_bkrestore(update, context, args):
     _pending.pop(update.effective_user.id, None)
     await ask(update, context, "bk_wait",
-              "📤 <b>Restore</b>\n\nSend the backup file (<code>fsb-backup-….json.gz</code>).\n"
-              "If it came in several parts, send all of them.")
+              head("📤", "Restore", "SEND THE BACKUP FILE (<code>fsb-backup-….json.gz</code>).\n"
+                                    "IF IT CAME IN PARTS, SEND ALL OF THEM."))
 
 
 # ===================================================================== receiving the file
@@ -107,51 +92,46 @@ async def ingest(update, context):
     msg, uid = update.effective_message, update.effective_user.id
     doc = msg.document
     if not doc:
-        await msg.reply_text("⚠️ Please send the backup file.", reply_markup=K.cancel())
+        await warn(update, "SEND THE BACKUP FILE.")
         return
     context.user_data.pop("state", None)
     if doc.file_size and doc.file_size > TG_DOWNLOAD_LIMIT:
-        await msg.reply_text("⚠️ File is larger than 20 MB - the Bot API cannot download it.")
+        await msg.reply_text("⚠️ FILE IS OVER 20 MB. THE BOT API CANNOT DOWNLOAD IT.", reply_markup=K.back("bk"))
         return
-    status = await msg.reply_text("⏳ Reading backup…")
+    status = await msg.reply_text("⏳ READING BACKUP…")
     try:
         f = await doc.get_file()
         data = bytes(await f.download_as_bytearray())
         part = await asyncio.to_thread(BK.parse_part, data)
     except ValueError as e:
-        await status.edit_text(f"⚠️ {html.escape(str(e)).capitalize()}.")
+        await status.edit_text(f"⚠️ {esc(e).upper()}.", reply_markup=K.back("bk"))
         return
     except Exception as e:
         log.exception("Backup file could not be read")
-        await status.edit_text(f"⚠️ Could not read the file: <code>{html.escape(str(e))}</code>")
+        await status.edit_text(f"⚠️ COULD NOT READ THE FILE ▸ <code>{esc(e)}</code>", reply_markup=K.back("bk"))
         return
 
-    head, tail = part["head"], part["tail"]
+    head_, tail = part["head"], part["tail"]
     cur = _pending.get(uid)
-    if not cur or cur["id"] != head["id"]:
-        cur = _pending[uid] = {"id": head["id"], "of": int(tail.get("of", 1)), "parts": {}}
+    if not cur or cur["id"] != head_["id"]:
+        cur = _pending[uid] = {"id": head_["id"], "of": int(tail.get("of", 1)), "parts": {}}
     cur["parts"][int(tail.get("part", 1))] = part
 
     if len(cur["parts"]) < cur["of"]:
-        await status.edit_text(f"📦 Part {len(cur['parts'])} of {cur['of']} received. Send the remaining part(s).",
+        await status.edit_text(f"📦 PART <b>{len(cur['parts'])}/{cur['of']}</b> RECEIVED. SEND THE REST.",
                                reply_markup=K.cancel())
         return
 
-    info = BK.summarize([cur["parts"][k] for k in sorted(cur["parts"])])
-    d = info["docs"]
+    d = BK.summarize(_parts(cur))["docs"]
     await status.edit_text(
-        "💾 <b>Backup ready</b>\n\n"
-        f"📅 {html.escape(head.get('created_str', '?'))} · @{html.escape(head.get('bot') or '?')}\n"
-        f"👥 {len(d['users'])} users · 🔗 {len(d['links'])} links · 📁 {len(d['files'])} files\n"
-        f"📅 {len(d['ap_channels'])} Autoposter channel(s), {len(d['ap_posts'])} post(s)\n\n"
-        "<b>Replace everything</b> - the database becomes exactly this backup.\n"
-        "<b>Merge</b> - adds only what is missing, existing data stays.",
-        reply_markup=M([
-            [B("♻️ Replace everything", "adm:bkgo:full")],
-            [B("➕ Merge", "adm:bkgo:merge")],
-            [B("❌ Cancel", "adm:bkx")],
-        ]),
-    )
+        head("💾", "Backup Ready",
+             f"📅 {esc(head_.get('created_str', '?'))} · @{esc(head_.get('bot') or '?')}\n"
+             f"👥 <b>{len(d['users'])}</b> USERS · 🔗 <b>{len(d['links'])}</b> LINKS · 📁 <b>{len(d['files'])}</b> FILES\n"
+             f"📅 AUTOPOSTER ▸ <b>{len(d['ap_channels'])}</b> CHANNELS · <b>{len(d['ap_posts'])}</b> POSTS\n\n"
+             "<b>REPLACE</b> ▸ DATABASE BECOMES THIS BACKUP.\n"
+             "<b>MERGE</b> ▸ ADDS ONLY WHAT IS MISSING."),
+        reply_markup=kb(grid([("♻️ Replace", "adm:bkgo:full"), ("➕ Merge", "adm:bkgo:merge")]),
+                        ub("❌ Cancel", "adm:bkx")))
 
 
 state("bk_wait")(ingest)
@@ -170,14 +150,13 @@ async def a_bkgo(update, context, args):
     mode = args[0] if args and args[0] in ("full", "merge") else "merge"
     cur = _pending.pop(update.effective_user.id, None)
     if not cur:
-        await show(update, "⚠️ Backup expired. Send the file again.", K.back("bk"))
+        await show(update, "⚠️ BACKUP EXPIRED. SEND THE FILE AGAIN.", K.back("bk"))
         return
-    await show(update, "⏳ Restoring…")
+    await show(update, "⏳ RESTORING…")
     try:
-        report = await BK.restore(context.bot, update.effective_chat.id,
-                                  [cur["parts"][k] for k in sorted(cur["parts"])], mode)
+        report = await BK.restore(context.bot, update.effective_chat.id, _parts(cur), mode)
     except Exception as e:
         log.exception("Restore failed")
-        await show(update, f"⚠️ Restore failed: <code>{html.escape(str(e))}</code>", K.back("bk"))
+        await show(update, f"⚠️ RESTORE FAILED ▸ <code>{esc(e)}</code>", K.back("bk"))
         return
-    await show(update, report, K.back())
+    await show(update, report, K.back("bk"))

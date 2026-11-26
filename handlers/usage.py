@@ -9,28 +9,19 @@ VPS Usage screens of the admin panel (owner only).
 Numbers are collected by utils/usage.py (hourly documents in MongoDB, IST days).
 """
 import datetime as dt
-import html
 import logging
-
-from telegram import InlineKeyboardMarkup as M
 
 from handlers.admin import action, show
 from utils import usage as U
 from utils.helpers import owner_only
-from utils.keyboards import ub
+from utils.keyboards import grid, kb, ub
+from utils.ui import bar as _bar, table as _table
 
 log = logging.getLogger(__name__)
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 # ------------------------------------------------------------------ formatting
-def _table(rows, widths) -> str:
-    out = []
-    for r in rows:
-        out.append(str(r[0]).ljust(widths[0]) + "".join(str(c).rjust(w) for c, w in zip(r[1:], widths[1:])))
-    return "<pre>" + html.escape("\n".join(out)) + "</pre>"
-
-
 def _bytes(n) -> str:
     n = float(n or 0)
     if n >= 1e12:
@@ -51,19 +42,10 @@ def _mbps(x) -> str:
     return f"{x:.0f}" if x >= 10 else f"{x:.1f}"
 
 
-def _bar(pct, n: int = 12) -> str:
-    """█████░░░░░░░ - a pct (0-100) bar."""
-    k = max(0, min(n, round(float(pct or 0) / 100 * n)))
-    return "█" * k + "░" * (n - k)
-
-
 def _kb(active: str = ""):
-    return M([
-        [ub("📅 Daily", "adm:vps:d"), ub("📆 Weekly", "adm:vps:w")],
-        [ub("🗓 Monthly", "adm:vps:m"), ub("💡 Plan Advice", "adm:vps:p")],
-        [ub("🔄 Refresh", f"adm:vps:{active}" if active else "adm:vps")],
-        [ub("🔙 Back", "adm:servers")],
-    ])
+    return kb(grid([("📅 Daily", "adm:vps:d"), ("📆 Weekly", "adm:vps:w"),
+                    ("🗓 Monthly", "adm:vps:m"), ("💡 Plan Advice", "adm:vps:p"),
+                    ("🔄 Refresh", f"adm:vps:{active}" if active else "adm:vps")]), ub("🔙 Back", "adm:servers"))
 
 
 def _row(label, a):

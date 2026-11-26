@@ -1,4 +1,3 @@
-
 """
 handlers/admin.py
 The whole admin panel. Nothing here is typed as a command:
@@ -10,26 +9,23 @@ The whole admin panel. Nothing here is typed as a command:
                    (b) a file upload -> handlers.upload.
 
 State machine: context.user_data["state"] = name of the prompt being answered.
-Every prompt has a "❌ Cancel" button; every result screen has a "🔙 Back" button.
+Every prompt has a CANCEL button; every result screen has a BACK button.
+Design: utils/ui.py (text) + utils/keyboards.py (buttons).
 """
-import html
 import logging
 import re
-import time
 
 import config
 
-from telegram import (
-    InlineKeyboardButton as _InlineKeyboardButton,
-    InlineKeyboardMarkup as M,
-    LinkPreviewOptions,
-)
+from telegram import LinkPreviewOptions
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, TelegramError
 
 from database import db
 from database.db import settings as S
 from handlers import broadcast, upload
+from utils import ads
+from utils import chats as CH
 from utils import keyboards as K
 from utils.helpers import (
     admin_only,
@@ -40,28 +36,19 @@ from utils.helpers import (
     extract_user_id,
     extract_post_id,
 )
-from utils import ads
-from utils import chats as CH
+from utils.keyboards import grid, kb, nm, pager, ub
 from utils.links import share_link
 from utils.streamer import streamer
+from utils.ui import ago, esc, head, mb, note, onoff
 
 log = logging.getLogger(__name__)
-
-
-# FIX: Telegram's second positional argument is URL, not callback_data.
-# All admin navigation buttons use callback_data.
-def B(text, callback_data):
-    return _InlineKeyboardButton(
-        text=text,
-        callback_data=callback_data,
-    )
-
 
 NOPREVIEW = LinkPreviewOptions(is_disabled=True)
 PAGE = 8
 MAX_RANGE = 10000
-TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first", "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst", "tr_cl", "tr_wp", "pick_state", "pick_kind", "picked_chat", "ct_uid")
-
+TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first",
+             "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst", "tr_cl",
+             "tr_wp", "pick_state", "pick_kind", "picked_chat", "ct_uid")
 
 ACTIONS = {}
 STATES = {}
@@ -84,33 +71,19 @@ def state(name):
 
 # ===================================================================== helpers
 
-async def show(update, text, kb=None):
-    """Edit the panel message in place or send a new one."""
+async def show(update, text, markup=None):
+    """Edit the panel message in place, or send a new one."""
     q = update.callback_query
+    opts = dict(reply_markup=markup, parse_mode=ParseMode.HTML, link_preview_options=NOPREVIEW)
     try:
         if q:
-            await q.edit_message_text(
-                text,
-                reply_markup=kb,
-                parse_mode=ParseMode.HTML,
-                link_preview_options=NOPREVIEW,
-            )
+            await q.edit_message_text(text, **opts)
         else:
-            await update.effective_message.reply_text(
-                text,
-                reply_markup=kb,
-                parse_mode=ParseMode.HTML,
-                link_preview_options=NOPREVIEW,
-            )
+            await update.effective_message.reply_text(text, **opts)
     except BadRequest as e:
         if "not modified" in str(e).lower():
             return
-        await update.effective_chat.send_message(
-            text,
-            reply_markup=kb,
-            parse_mode=ParseMode.HTML,
-            link_preview_options=NOPREVIEW,
-        )
+        await update.effective_chat.send_message(text, **opts)
 
 
 async def ask(update, context, state_name, text):
@@ -119,37 +92,40 @@ async def ask(update, context, state_name, text):
     await show(update, text, K.cancel())
 
 
+async def warn(update, text):
+    """Typed answer was not usable: say why, keep the prompt open."""
+    await update.effective_message.reply_text(f"⚠️ {text}", reply_markup=K.cancel())
+
+
+async def done(update, context, text, to="home"):
+    """Typed answer accepted: close the prompt and show the result with a BACK button."""
+    context.user_data.pop("state", None)
+    await update.effective_message.reply_text(text, reply_markup=K.back(to))
+
+
 async def ask_chat(update, context, state_name, text, channel=True, group=False):
-    """Prompt with the bot's known channels / groups as inline buttons right in the chat."""
+    """Prompt with the bot's known channels / groups as buttons right in the chat."""
     context.user_data["state"] = state_name
     context.user_data["pick_state"] = state_name
     context.user_data["pick_kind"] = (channel, group)
     items = await CH.listing(channel, group)
-    rows = []
-    for d in items:
-        icon = "📢" if d.get("type") == "channel" else "👥"
-        t = (d.get("title") or str(d["_id"]))[:40]
-        rows.append([B(f"{icon} {t}", f"adm:pickch:{d['_id']}")])
-    rows.append([B("❌ Cancel", "adm:cancel")])
-    if items:
-        hint = "\n\n👇 <b>Tap a channel below to select it.</b>"
-    else:
-        hint = "\n\n📭 <b>No channel saved yet.</b>"
-    hint += ("\n<i>Not in the list? Add this bot as admin in your channel and it shows up here by itself - "
-             "or forward any post of the channel / send its @username / ID here.</i>")
-    await show(update, text + hint, M(rows))
+    rows = [[nm(f"{'📢' if d.get('type') == 'channel' else '👥'} {(d.get('title') or str(d['_id']))[:40]}",
+                f"adm:pickch:{d['_id']}")] for d in items]
+    hint = ("TAP A CHANNEL, OR FORWARD A POST / SEND ITS @USERNAME OR ID." if items else
+            "NO CHANNEL SAVED YET. ADD THE BOT AS ADMIN, OR FORWARD A POST / SEND ITS @USERNAME OR ID.")
+    await show(update, f"{text}\n\n{hint}", kb(rows, ub("❌ Cancel", "adm:cancel")))
 
 
 @action("pickch")
 async def a_pickch(update, context, args):
     st = context.user_data.get("pick_state")
     if st not in STATES or not args:
-        await show(update, "⚠️ Session expired, start again.", K.back())
+        await show(update, "⚠️ SESSION EXPIRED. START AGAIN.", K.back())
         return
     try:
         cid = int(args[0])
     except ValueError:
-        await show(update, "⚠️ Invalid channel.", K.back())
+        await show(update, "⚠️ INVALID CHANNEL.", K.back())
         return
     context.user_data["state"] = st
     context.user_data["picked_chat"] = cid
@@ -157,24 +133,7 @@ async def a_pickch(update, context, args):
 
 
 def panel_text() -> str:
-    return (
-        "⚙️ <b>ADMIN CONTROL PANEL</b>\n\n"
-        "SELECT AN OPTION TO MANAGE YOUR BOT."
-    )
-
-
-def settings_text() -> str:
-    ch, fs, ad = S.get("db_channel"), S.get("fsub_channels"), S.get("autodelete")
-    db_txt = f"<b>{html.escape(ch['title'] or '')}</b>" if ch else "❌ not set"
-    return (
-        "⚙️ <b>SETTINGS</b>\n\n"
-        f"📡 Database channel: {db_txt}\n"
-        f"🔔 Force-sub: {'ON' if S.get('fsub_enabled') else 'OFF'} "
-        f"({len(fs)} channel{'s' if len(fs) != 1 else ''})\n"
-        f"⏱ Auto-delete: {f'{ad} min' if ad else 'off'}\n"
-        f"🎬 Delivery: {'Stream 🌐' if S.get('delivery_mode') == 'stream' else 'Forward 📩'}\n"
-        f"🛡 Protect content: {'ON' if S.get('protect') else 'OFF'}"
-    )
+    return head("⚙️", "Admin Control Panel", "SELECT AN OPTION TO MANAGE YOUR BOT.")
 
 
 async def send_panel(update, context):
@@ -189,13 +148,10 @@ async def send_panel(update, context):
 async def bot_admin_status(bot, chat_id, need_post=False):
     me = await bot.get_me()
     member = await bot.get_chat_member(chat_id, me.id)
-
     if member.status not in ("administrator", "creator"):
-        return False, "I'm not an admin in that chat. Add me as admin and try again."
-
+        return False, "THE BOT IS NOT AN ADMIN THERE. ADD IT AS ADMIN AND TRY AGAIN."
     if need_post and getattr(member, "can_post_messages", None) is False:
-        return False, "I need the “Post Messages” permission in that channel."
-
+        return False, "THE BOT NEEDS THE “POST MESSAGES” PERMISSION IN THAT CHANNEL."
     return True, ""
 
 
@@ -203,32 +159,20 @@ async def resolve_channel(update, context, need_post: bool):
     """Resolve a channel from an inline pick, a forwarded message, ID, or username."""
     msg = update.effective_message
     picked = context.user_data.pop("picked_chat", None)
-
     ref = picked if picked is not None else extract_chat_ref(msg)
 
     if ref is None:
-        await msg.reply_text(
-            "⚠️ Tap a channel in the list above, or forward a post of the channel / send its @username or ID.",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, "TAP A CHANNEL ABOVE, OR FORWARD A POST / SEND ITS @USERNAME OR ID.")
         return None
-
     try:
         chat = await context.bot.get_chat(ref)
         ok, why = await bot_admin_status(context.bot, chat.id, need_post)
-
     except TelegramError as e:
-        await msg.reply_text(
-            f"⚠️ Unable to access this chat (<code>{html.escape(str(e))}</code>).\n"
-            "Add the bot as an admin and try again.",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, f"CANNOT ACCESS THIS CHAT ▸ <code>{esc(e)}</code>\nADD THE BOT AS ADMIN AND TRY AGAIN.")
         return None
-
     if not ok:
-        await msg.reply_text(why, reply_markup=K.cancel())
+        await warn(update, why)
         return None
-
     await CH.remember(chat)
     return chat
 
@@ -236,10 +180,8 @@ async def resolve_channel(update, context, need_post: bool):
 async def make_invite_link(bot, chat):
     if chat.username:
         return f"https://t.me/{chat.username}"
-
     if chat.invite_link:
         return chat.invite_link
-
     try:
         return (await bot.create_chat_invite_link(chat.id)).invite_link
     except TelegramError:
@@ -254,39 +196,27 @@ async def make_invite_link(bot, chat):
 @admin_only
 async def callback_router(update, context):
     q = update.callback_query
-    parts = q.data.split(":")[1:]
-
-    name, args = parts[0], parts[1:]
+    name, args = q.data.split(":")[1], q.data.split(":")[2:]
     fn = ACTIONS.get(name)
-
     if not fn:
-        await q.answer("Unknown action")
+        await q.answer("UNKNOWN ACTION")
         return
-
     if name not in SELF_ANSWER:
         await q.answer()
-
     if name not in ("batchdone", "noop"):
         context.user_data.pop("state", None)
-
     try:
         await fn(update, context, args)
     except TelegramError as e:
         log.exception("Admin action %s failed", name)
-        await show(
-            update,
-            f"⚠️ Telegram error: <code>{html.escape(str(e))}</code>",
-            K.back(),
-        )
+        await show(update, head("⚠️", "Telegram Error", f"<code>{esc(e)}</code>"), K.back())
 
 
 async def message_router(update, context):
     """Every non-command private message lands here."""
     user, msg = update.effective_user, update.effective_message
-
     if not user or not msg:
         return
-
     if not is_admin(user.id):          # a normal user writes to the bot -> forwarded to the owner
         from handlers import contact
         await contact.relay(update, context)
@@ -302,42 +232,34 @@ async def message_router(update, context):
 
     if st == "batch":
         await upload.handle_upload(update, context)
-
     elif st in STATES:
         await STATES[st](update, context)
-
     elif upload.media_info(msg)[0]:
         await upload.handle_upload(update, context)
-
     else:
         await send_panel(update, context)
 
 
-# ===================================================================== core
+# ===================================================================== menus
 
 @action("home")
 async def a_home(update, context, args):
-    await show(
-        update,
-        panel_text(),
-        K.main_panel(is_owner(update.effective_user.id)),
-    )
+    await show(update, panel_text(), K.main_panel(is_owner(update.effective_user.id)))
 
 
 @action("settings")
 async def a_settings(update, context, args):
-    await show(update, settings_text(), K.settings_panel())
+    await show(update, head("⚙️", "Settings", "SELECT AN OPTION TO CONFIGURE THE BOT."), K.settings_panel())
 
 
 @action("users")
 async def a_users(update, context, args):
-    await show(update, "👥 <b>USERS</b>\n\nBAN, UNBAN AND MANAGE ADMINS.",
-               K.users_panel(is_owner(update.effective_user.id)))
+    await show(update, head("👥", "Users", "BANS AND ADMINS."), K.users_panel(is_owner(update.effective_user.id)))
 
 
 @action("monet")
 async def a_monet(update, context, args):
-    await show(update, "💰 <b>MONETIZATION</b>\n\nADS AND EARNINGS.",
+    await show(update, head("💰", "Monetization", "ADS AND EARNINGS."),
                K.monetization_panel(is_owner(update.effective_user.id)))
 
 
@@ -345,7 +267,7 @@ async def a_monet(update, context, args):
 async def a_servers(update, context, args):
     if not is_owner(update.effective_user.id):
         return
-    await show(update, "🖥️ <b>SERVERS</b>\n\nVPS USAGE AND TRANSFER.", K.servers_panel())
+    await show(update, head("🖥️", "Servers", "VPS USAGE AND TRANSFER."), K.servers_panel())
 
 
 @action("close")
@@ -360,7 +282,6 @@ async def a_close(update, context, args):
 async def a_cancel(update, context, args):
     for k in TEMP_KEYS:
         context.user_data.pop(k, None)
-
     await a_home(update, context, args)
 
 
@@ -374,66 +295,30 @@ async def a_noop(update, context, args):
 @action("dbch")
 async def a_dbch(update, context, args):
     cur = S.get("db_channel")
-
-    cur_txt = (
-        f"<b>{html.escape(cur['title'] or '')}</b>"
-        if cur else "❌ not set"
-    )
-
-    await ask_chat(
-        update,
-        context,
-        "dbch",
-        f"📡 <b>Database Channel</b>\nCurrent: {cur_txt}\n\n"
-        "Choose the channel where files will be stored.\n"
-        "If the bot is not an admin there, Telegram will offer to add it.",
-    )
+    now = f"<b>{esc(cur['title'] or '')}</b>" if cur else "NOT SET"
+    await ask_chat(update, context, "dbch",
+                   head("📡", "Database Channel", f"CURRENT ▸ {now}\n\nCHOOSE WHERE FILES ARE STORED."))
 
 
 @state("dbch")
 async def st_dbch(update, context):
     chat = await resolve_channel(update, context, need_post=True)
-
     if not chat:
         return
-
-    await S.set(
-        "db_channel",
-        {"id": chat.id, "title": chat.title or str(chat.id)},
-    )
-
-    context.user_data.pop("state", None)
-
-    await update.effective_message.reply_text(
-        f"✅ Database channel set to <b>{html.escape(chat.title or '')}</b>.\n"
-        "Uploaded files will be stored in this channel.",
-        reply_markup=K.back(),
-    )
+    await S.set("db_channel", {"id": chat.id, "title": chat.title or str(chat.id)})
+    await done(update, context, f"✅ DATABASE CHANNEL SET ▸ <b>{esc(chat.title or '')}</b>.", "settings")
 
 
 # ===================================================================== admins (owner only)
 
-async def show_admins(update, note=""):
+async def show_admins(update, msg=""):
     admins = S.get("admins")
-
-    rows = [
-        [
-            B(f"👤 {uid}", "adm:noop"),
-            B("❌ Remove", f"adm:rmadmin:{uid}"),
-        ]
-        for uid in admins
-    ]
-
-    rows.append([B("➕ Add Admin", "adm:addadmin")])
-    rows.append([B("🔙 Back", "adm:home")])
-
-    body = "\n".join(f"• <code>{u}</code>" for u in admins) or "No extra admins yet."
-
-    await show(
-        update,
-        f"{note}👮 <b>Admins</b>\n\nOwner: <code>{config.OWNER_ID}</code>\n{body}",
-        M(rows),
-    )
+    rows = [[ub(f"👤 {uid}", "adm:noop"), ub("❌ Remove", f"adm:rmadmin:{uid}")] for uid in admins]
+    rows.append([ub("➕ Add Admin", "adm:addadmin")])
+    await show(update,
+               note(msg) + head("👮", "Admins", f"OWNER ▸ <code>{config.OWNER_ID}</code>\n"
+                                               f"ADMINS ▸ <b>{len(admins) or 'NONE'}</b>"),
+               kb(rows, ub("🔙 Back", "adm:users")))
 
 
 @action("admins")
@@ -445,91 +330,56 @@ async def a_admins(update, context, args):
 @action("addadmin")
 @owner_only
 async def a_addadmin(update, context, args):
-    await ask(
-        update,
-        context,
-        "addadmin",
-        "👮 <b>Add Admin</b>\n\n"
-        "Forward a message from the user, or send their user ID.",
-    )
+    await ask(update, context, "addadmin",
+              head("👮", "Add Admin", "FORWARD A MESSAGE FROM THE USER, OR SEND THEIR USER ID."))
 
 
 @state("addadmin")
 async def st_addadmin(update, context):
-    msg = update.effective_message
-
     if not is_owner(update.effective_user.id):
         return
-
-    uid = extract_user_id(msg)
-
+    uid = extract_user_id(update.effective_message)
     if uid is None:
-        await msg.reply_text(
-            "⚠️ Unable to read the user ID (the user's forwarding is hidden).\n"
-            "Please send the numeric ID instead.",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, "COULD NOT READ THE USER ID. SEND IT AS DIGITS.")
         return
-
     admins = list(S.get("admins"))
-
     if uid not in admins and not is_owner(uid):
         admins.append(uid)
         await S.set("admins", admins)
-
-    context.user_data.pop("state", None)
-
-    await msg.reply_text(
-        f"✅ <code>{uid}</code> is now an admin.",
-        reply_markup=K.back("admins"),
-    )
+    await done(update, context, f"✅ <code>{uid}</code> IS NOW AN ADMIN.", "admins")
 
 
 @action("rmadmin")
 @owner_only
 async def a_rmadmin(update, context, args):
     uid = int(args[0])
-
-    await S.set(
-        "admins",
-        [a for a in S.get("admins") if a != uid],
-    )
-
-    await show_admins(update, f"✅ Removed <code>{uid}</code>.\n\n")
+    await S.set("admins", [a for a in S.get("admins") if a != uid])
+    await show_admins(update, f"✅ REMOVED <code>{uid}</code>.")
 
 
 # ===================================================================== force-subscribe
 
-async def show_fsub(update, note=""):
+async def show_fsub(update, msg=""):
     chans, on = S.get("fsub_channels"), S.get("fsub_enabled")
-    rows = []
+    rows = [[nm(f"📢 {c['title'][:30]}", f"adm:fsubch:{c['id']}")] for c in chans]
+    rows += grid([("➕ Add Channel", "adm:fsubadd"),
+                  ("🔕 Turn OFF" if on else "🔔 Turn ON", "adm:fsubtoggle")])
+    await show(update,
+               note(msg) + head("🔔", "Force-Sub", f"STATUS ▸ <b>{onoff(on)}</b> · CHANNELS ▸ <b>{len(chans)}</b>\n\n"
+                                                  + ("TAP A CHANNEL TO MOVE OR REMOVE IT." if chans else "NO CHANNEL ADDED YET.")),
+               kb(rows, ub("🔙 Back", "adm:settings")))
 
-    for c in chans:
-        rows.append([
-            B(c["title"][:22], "adm:noop"),
-            B("⬆️", f"adm:fsubup:{c['id']}"),
-            B("⬇️", f"adm:fsubdown:{c['id']}"),
-            B("❌", f"adm:fsubrm:{c['id']}"),
-        ])
 
-    rows.append([B("➕ Add Channel", "adm:fsubadd")])
-
-    rows.append([
-        B(
-            "🔕 Disable Force-Sub" if on else "🔔 Enable Force-Sub",
-            "adm:fsubtoggle",
-        )
-    ])
-
-    rows.append([B("🔙 Back", "adm:home")])
-
-    await show(
-        update,
-        f"{note}🔔 <b>Force-Subscribe</b>: {'ON ✅' if on else 'OFF ⛔'}\n\n"
-        "Users must join all channels listed below.\n"
-        "Use ⬆️ ⬇️ to reorder and ❌ to remove.",
-        M(rows),
-    )
+async def show_fsub_channel(update, cid: int, msg=""):
+    chans = S.get("fsub_channels")
+    idx = next((i for i, c in enumerate(chans) if c["id"] == cid), None)
+    if idx is None:
+        await show_fsub(update)
+        return
+    await show(update,
+               note(msg) + f"📢 <b>{esc(chans[idx]['title'])}</b>\n\nPOSITION ▸ <b>{idx + 1}/{len(chans)}</b>",
+               kb(grid([("⬆️ Up", f"adm:fsubup:{cid}"), ("⬇️ Down", f"adm:fsubdown:{cid}"),
+                        ("🗑 Remove", f"adm:fsubrm:{cid}")]), ub("🔙 Back", "adm:fsub")))
 
 
 @action("fsub")
@@ -537,77 +387,45 @@ async def a_fsub(update, context, args):
     await show_fsub(update)
 
 
+@action("fsubch")
+async def a_fsubch(update, context, args):
+    await show_fsub_channel(update, int(args[0]))
+
+
 @action("fsubtoggle")
 async def a_fsubtoggle(update, context, args):
     await S.set("fsub_enabled", not S.get("fsub_enabled"))
-    await show_fsub(update, "✅ Updated.\n\n")
+    await show_fsub(update, "✅ UPDATED.")
 
 
 @action("fsubadd")
 async def a_fsubadd(update, context, args):
-    await ask_chat(
-        update,
-        context,
-        "fsubadd",
-        "➕ <b>Add Force-Sub Channel</b>\n\n"
-        "Choose the channel users must join.\n"
-        "If the bot is not an admin there, Telegram will offer to add it.",
-    )
+    await ask_chat(update, context, "fsubadd",
+                   head("➕", "Add Channel", "CHOOSE THE CHANNEL USERS MUST JOIN."))
 
 
 @state("fsubadd")
 async def st_fsubadd(update, context):
     chat = await resolve_channel(update, context, need_post=False)
-
     if not chat:
         return
-
-    msg = update.effective_message
     chans = list(S.get("fsub_channels"))
-
     if any(c["id"] == chat.id for c in chans):
-        context.user_data.pop("state", None)
-        await msg.reply_text(
-            "ℹ️ That channel is already in the list.",
-            reply_markup=K.back("fsub"),
-        )
+        await done(update, context, "ℹ️ ALREADY IN THE LIST.", "fsub")
         return
-
     link = await make_invite_link(context.bot, chat)
-
     if not link:
-        await msg.reply_text(
-            "⚠️ Unable to create an invite link.\n"
-            "Grant the bot the “Invite Users” permission and try again.",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, "COULD NOT CREATE AN INVITE LINK. GIVE THE BOT THE “INVITE USERS” PERMISSION.")
         return
-
-    chans.append({
-        "id": chat.id,
-        "title": chat.title or str(chat.id),
-        "link": link,
-    })
-
+    chans.append({"id": chat.id, "title": chat.title or str(chat.id), "link": link})
     await S.set("fsub_channels", chans)
-    context.user_data.pop("state", None)
-
-    await msg.reply_text(
-        f"✅ Added <b>{html.escape(chat.title or '')}</b> to force-sub.",
-        reply_markup=K.back("fsub"),
-    )
+    await done(update, context, f"✅ ADDED <b>{esc(chat.title or '')}</b>.", "fsub")
 
 
 async def _move(chat_id: int, delta: int):
     chans = list(S.get("fsub_channels"))
-
-    idx = next(
-        (i for i, c in enumerate(chans) if c["id"] == chat_id),
-        None,
-    )
-
+    idx = next((i for i, c in enumerate(chans) if c["id"] == chat_id), None)
     new = None if idx is None else idx + delta
-
     if new is not None and 0 <= new < len(chans):
         chans[idx], chans[new] = chans[new], chans[idx]
         await S.set("fsub_channels", chans)
@@ -616,116 +434,78 @@ async def _move(chat_id: int, delta: int):
 @action("fsubup")
 async def a_fsubup(update, context, args):
     await _move(int(args[0]), -1)
-    await show_fsub(update)
+    await show_fsub_channel(update, int(args[0]))
 
 
 @action("fsubdown")
 async def a_fsubdown(update, context, args):
     await _move(int(args[0]), 1)
-    await show_fsub(update)
+    await show_fsub_channel(update, int(args[0]))
 
 
 @action("fsubrm")
 async def a_fsubrm(update, context, args):
     cid = int(args[0])
-
-    await S.set(
-        "fsub_channels",
-        [c for c in S.get("fsub_channels") if c["id"] != cid],
-    )
-
-    await show_fsub(update, "✅ Channel removed.\n\n")
+    await S.set("fsub_channels", [c for c in S.get("fsub_channels") if c["id"] != cid])
+    await show_fsub(update, "🗑 CHANNEL REMOVED.")
 
 
 # ===================================================================== start image / caption
 
 @action("simg")
 async def a_simg(update, context, args):
-    has = "✅ set" if S.get("start_image") else "❌ not set"
-
     context.user_data["state"] = "simg"
-
-    await show(
-        update,
-        f"🖼 <b>Start Image</b> ({has})\n\n"
-        "Send a <b>photo</b> to use as the start image.",
-        M([
-            [B("🗑 Remove image", "adm:simgrm")],
-            [B("❌ Cancel", "adm:cancel")],
-        ]),
-    )
+    await show(update,
+               head("🖼", "Start Image", f"STATUS ▸ <b>{'SET' if S.get('start_image') else 'NOT SET'}</b>\n\n"
+                                         "SEND A PHOTO TO REPLACE IT."),
+               kb([[ub("🗑 Remove", "adm:simgrm")]], ub("❌ Cancel", "adm:cancel")))
 
 
 @action("simgrm")
 async def a_simgrm(update, context, args):
     await S.set("start_image", None)
-    await show(update, "✅ Start image removed.", K.back())
+    await show(update, "🗑 START IMAGE REMOVED.", K.back("settings"))
 
 
 @state("simg")
 async def st_simg(update, context):
     msg = update.effective_message
-
     if not msg.photo:
-        await msg.reply_text(
-            "⚠️ Please send a photo, not a file.",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, "SEND A PHOTO, NOT A FILE.")
         return
-
     await S.set("start_image", msg.photo[-1].file_id)
     context.user_data.pop("state", None)
-
-    await msg.reply_photo(
-        msg.photo[-1].file_id,
-        caption="✅ Start image saved.",
-        reply_markup=K.back(),
-    )
+    await msg.reply_photo(msg.photo[-1].file_id, caption="✅ START IMAGE SAVED.", reply_markup=K.back("settings"))
 
 
 @action("scap")
 async def a_scap(update, context, args):
     context.user_data["state"] = "scap"
-
-    await show(
-        update,
-        "📝 <b>Start Caption</b>\n\n"
-        "Send the new caption (HTML supported, max 1000 characters).\n"
-        "Placeholders: <code>{first_name}</code>, <code>{mention}</code>\n\n"
-        f"<b>Current:</b>\n{S.get('start_caption')}",
-        M([
-            [B("↩️ Reset to default", "adm:scaprs")],
-            [B("❌ Cancel", "adm:cancel")],
-        ]),
-    )
+    await show(update,
+               head("📝", "Start Caption",
+                    "SEND A NEW CAPTION (HTML, MAX 1000 CHARACTERS).\n"
+                    "TAGS ▸ <code>{first_name}</code> <code>{mention}</code>\n\n"
+                    f"<b>CURRENT</b>\n{S.get('start_caption')}"),
+               kb([[ub("↩️ Reset", "adm:scaprs")]], ub("❌ Cancel", "adm:cancel")))
 
 
 @action("scaprs")
 async def a_scaprs(update, context, args):
     await S.set("start_caption", db.DEFAULT_CAPTION)
-    await show(update, "✅ Start caption reset to default.", K.back())
+    await show(update, "↩️ START CAPTION RESET.", K.back("settings"))
 
 
 @state("scap")
 async def st_scap(update, context):
     msg = update.effective_message
     text = msg.text_html if msg.text else None
-
     if not text or len(text) > 1000:
-        await msg.reply_text(
-            "⚠️ Send text up to 1000 characters (formatting included).",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, "SEND TEXT UP TO 1000 CHARACTERS.")
         return
-
     await S.set("start_caption", text)
-    context.user_data.pop("state", None)
-
-    await msg.reply_text(
-        "✅ Start caption saved. Preview:\n\n" +
-        text.replace("{first_name}", "Friend").replace("{mention}", "Friend"),
-        reply_markup=K.back(),
-    )
+    await done(update, context,
+               "✅ START CAPTION SAVED.\n\n" + text.replace("{first_name}", "Friend").replace("{mention}", "Friend"),
+               "settings")
 
 
 # ===================================================================== join buttons
@@ -733,335 +513,194 @@ async def st_scap(update, context):
 def parse_buttons(text: str):
     """Lines of 'Text - URL'; use ' | ' to put several buttons in one row."""
     rows = []
-
     for line in text.splitlines():
         row = []
-
         for part in line.split("|"):
             part = part.strip()
-
             if not part:
                 continue
-
             if " - " not in part:
-                raise ValueError(f"Missing ' - ' in: {part}")
-
+                raise ValueError(f"MISSING ' - ' IN: {part}")
             label, url = (x.strip() for x in part.rsplit(" - ", 1))
-
             if not label or not re.match(r"^(https?://|tg://)\S+$", url):
-                raise ValueError(f"Bad button or URL: {part}")
-
+                raise ValueError(f"BAD BUTTON OR URL: {part}")
             row.append([label, url])
-
         if row:
             rows.append(row)
-
     if not rows:
-        raise ValueError("No buttons found")
-
+        raise ValueError("NO BUTTONS FOUND")
     return rows
 
 
 @action("btns")
 async def a_btns(update, context, args):
-    rows = S.get("custom_buttons")
-
-    cur = "\n".join(
-        " | ".join(f"{t} - {u}" for t, u in r)
-        for r in rows
-    ) or "none"
-
-    await show(
-        update,
-        "🔘 <b>Join Buttons</b>\n\n"
-        "Channel buttons are created from the Force-Sub list.\n"
-        "You can add custom buttons below them.\n\n"
-        f"<b>Current custom buttons:</b>\n{html.escape(cur)}",
-        M([
-            [B("✏️ Set custom buttons", "adm:btnset")],
-            [B("🗑 Clear custom buttons", "adm:btnclr")],
-            [B("🔙 Back", "adm:home")],
-        ]),
-    )
+    cur = "\n".join(" | ".join(f"{t} - {u}" for t, u in r) for r in S.get("custom_buttons"))
+    await show(update,
+               head("🔘", "Join Buttons", "CHANNEL BUTTONS COME FROM FORCE-SUB.\n\n"
+                                          f"<b>CUSTOM</b>\n{esc(cur) if cur else 'NONE'}"),
+               kb(grid([("✏️ Set", "adm:btnset"), ("🗑 Clear", "adm:btnclr")]), ub("🔙 Back", "adm:settings")))
 
 
 @action("btnset")
 async def a_btnset(update, context, args):
-    await ask(
-        update,
-        context,
-        "btns",
-        "✏️ <b>Custom Buttons</b>\n\n"
-        "Send one button per line:\n"
-        "<code>Text - https://example.com</code>\n"
-        "Multiple buttons in a row: <code>Text1 - URL1 | Text2 - URL2</code>",
-    )
+    await ask(update, context, "btns",
+              head("✏️", "Custom Buttons", "ONE BUTTON PER LINE:\n<code>Text - https://example.com</code>\n"
+                                           "SAME ROW:\n<code>Text1 - URL1 | Text2 - URL2</code>"))
 
 
 @state("btns")
 async def st_btns(update, context):
-    msg = update.effective_message
-
     try:
-        rows = parse_buttons(msg.text or "")
+        rows = parse_buttons(update.effective_message.text or "")
     except ValueError as e:
-        await msg.reply_text(
-            f"⚠️ {html.escape(str(e))}\nFormat: <code>Text - URL</code>",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, f"{esc(e)}\nFORMAT ▸ <code>Text - URL</code>")
         return
-
     await S.set("custom_buttons", rows)
-    context.user_data.pop("state", None)
-
-    await msg.reply_text(
-        f"✅ Saved {sum(len(r) for r in rows)} custom button(s).",
-        reply_markup=K.back("btns"),
-    )
+    await done(update, context, f"✅ SAVED <b>{sum(len(r) for r in rows)}</b> BUTTON(S).", "btns")
 
 
 @action("btnclr")
 async def a_btnclr(update, context, args):
     await S.set("custom_buttons", [])
-    await show(update, "✅ Custom buttons cleared.", K.back("btns"))
+    await show(update, "🗑 CUSTOM BUTTONS CLEARED.", K.back("btns"))
 
 
 # ===================================================================== delivery mode (forward / stream)
 
 @action("mode")
 async def a_mode(update, context, args):
-    note = ""
-
+    msg = ""
     if args and args[0] in ("forward", "stream"):
         if args[0] == "stream" and not streamer.ready:
-            note = (
-                f"⚠️ Streaming is unavailable: "
-                f"<code>{html.escape(streamer.error or 'engine not running')}</code>\n\n"
-            )
+            msg = f"⚠️ STREAMING IS UNAVAILABLE ▸ <code>{esc(streamer.error or 'engine not running')}</code>"
         else:
             await S.set("delivery_mode", args[0])
-            note = "✅ Saved.\n\n"
-
+            msg = "✅ SAVED."
     cur = S.get("delivery_mode")
+    engine = "READY" if streamer.ready else f"OFF ({esc(streamer.error or 'not started')})"
 
     def b(m, label):
-        return B(
-            ("✅ " if cur == m else "") + label,
-            f"adm:mode:{m}",
-        )
+        return ub(("✅ " if cur == m else "") + label, f"adm:mode:{m}")
 
-    status = (
-        "✅ ready"
-        if streamer.ready
-        else f"❌ off ({html.escape(streamer.error or 'not started')})"
-    )
-
-    await show(
-        update,
-        f"{note}🎬 <b>Delivery Mode</b>\n\n"
-        "Choose what users receive when they open a share link.\n\n"
-        "📩 <b>Forward</b>: files are sent in the chat.\n"
-        "🌐 <b>Stream</b>: users get Stream and Download buttons (supports large files).\n\n"
-        f"Current: <b>{'Stream' if cur == 'stream' else 'Forward'}</b>\n"
-        f"Streaming engine: {status}",
-        M([
-            [b("forward", "📩 Forward"), b("stream", "🌐 Stream")],
-            [B("🔙 Back", "adm:home")],
-        ]),
-    )
+    await show(update,
+               note(msg) + head("🎬", "Delivery Mode",
+                                f"MODE ▸ <b>{'STREAM' if cur == 'stream' else 'FORWARD'}</b> · ENGINE ▸ <b>{engine}</b>\n\n"
+                                "📩 <b>FORWARD</b> ▸ FILES ARE SENT IN CHAT.\n"
+                                "🌐 <b>STREAM</b> ▸ STREAM + DOWNLOAD BUTTONS."),
+               kb([[b("forward", "📩 Forward"), b("stream", "🌐 Stream")]], ub("🔙 Back", "adm:settings")))
 
 
 # ===================================================================== auto-delete / protect
 
 @action("autodel")
 async def a_autodel(update, context, args):
-    note = ""
-
+    msg = ""
     if args and args[0] in ("0", "5", "10", "30"):
         await S.set("autodelete", int(args[0]))
-        note = "✅ Saved.\n\n"
-
+        msg = "✅ SAVED."
     cur = S.get("autodelete")
 
     def b(m, label):
-        return B(
-            ("✅ " if cur == m else "") + label,
-            f"adm:autodel:{m}",
-        )
+        return ub(("✅ " if cur == m else "") + label, f"adm:autodel:{m}")
 
-    await show(
-        update,
-        f"{note}⏱ <b>Auto-Delete</b>\n\n"
-        "Delivered files are deleted from the user's chat after this time.",
-        M([
-            [b(0, "Off"), b(5, "5 min"), b(10, "10 min"), b(30, "30 min")],
-            [B("🔙 Back", "adm:home")],
-        ]),
-    )
+    await show(update,
+               note(msg) + head("⏱", "Auto-Delete", f"CURRENT ▸ <b>{f'{cur} MIN' if cur else 'OFF'}</b>\n\n"
+                                                  "FILES VANISH FROM THE USER'S CHAT AFTER THIS TIME."),
+               kb([[b(0, "Off"), b(5, "5 min")], [b(10, "10 min"), b(30, "30 min")]], ub("🔙 Back", "adm:settings")))
 
 
 @action("protect")
 async def a_protect(update, context, args):
-    note = ""
-
+    msg = ""
     if args and args[0] == "t":
         await S.set("protect", not S.get("protect"))
-        note = "✅ Updated.\n\n"
-
+        msg = "✅ UPDATED."
     on = S.get("protect")
-
-    await show(
-        update,
-        f"{note}🛡 <b>Protect Content</b>: {'ON 🔒' if on else 'OFF 🔓'}\n\n"
-        "When ON, users cannot forward or save delivered files.",
-        M([
-            [B("🔓 Turn OFF" if on else "🔒 Turn ON", "adm:protect:t")],
-            [B("🔙 Back", "adm:home")],
-        ]),
-    )
+    await show(update,
+               note(msg) + head("🛡", "Protect Content", f"STATUS ▸ <b>{'ON 🔒' if on else 'OFF 🔓'}</b>\n\n"
+                                                         "ON BLOCKS FORWARDING AND SAVING OF DELIVERED FILES."),
+               kb([[ub("🔓 Turn OFF" if on else "🔒 Turn ON", "adm:protect:t")]], ub("🔙 Back", "adm:settings")))
 
 
 # ===================================================================== file caption
 
 @action("fcap")
 async def a_fcap(update, context, args):
-    note = ""
-
+    msg = ""
     if args and args[0] == "t":
         await S.set("remove_caption", not S.get("remove_caption"))
-        note = "✅ Updated.\n\n"
-
+        msg = "✅ UPDATED."
     elif args and args[0] == "clr":
         await S.set("custom_caption", "")
-        note = "✅ Custom caption cleared.\n\n"
-
+        msg = "🗑 CUSTOM CAPTION CLEARED."
     elif args and args[0] == "set":
-        await ask(
-            update,
-            context,
-            "fcap",
-            "✏️ <b>Custom File Caption</b>\n\n"
-            "Send the caption (HTML allowed, max 1000 characters). "
-            "It replaces the original caption on every delivered file.",
-        )
+        await ask(update, context, "fcap",
+                  head("✏️", "Custom Caption", "SEND THE CAPTION (HTML, MAX 1000 CHARACTERS).\n"
+                                               "IT REPLACES THE ORIGINAL CAPTION ON EVERY DELIVERED FILE."))
         return
-
     custom, rem = S.get("custom_caption"), S.get("remove_caption")
-
-    await show(
-        update,
-        f"{note}🏷 <b>File Caption</b>\n\n"
-        f"Custom caption: {custom or '— none —'}\n"
-        f"Remove original caption: {'ON' if rem else 'OFF'}\n\n"
-        "Order: custom caption, then remove original, then keep original.",
-        M([
-            [
-                B("✏️ Set custom caption", "adm:fcap:set"),
-                B("🗑 Clear", "adm:fcap:clr"),
-            ],
-            [
-                B(
-                    "🚫 Remove original: " + ("ON ✅" if rem else "OFF"),
-                    "adm:fcap:t",
-                )
-            ],
-            [B("🔙 Back", "adm:home")],
-        ]),
-    )
+    await show(update,
+               note(msg) + head("🏷", "File Caption",
+                                (f"<b>CUSTOM</b>\n{custom}" if custom else "CUSTOM ▸ <b>NONE</b>")
+                                + f"\n\nREMOVE ORIGINAL ▸ <b>{onoff(rem)}</b>\n"
+                                  "PRIORITY ▸ CUSTOM → REMOVE → ORIGINAL"),
+               kb(grid([("✏️ Set", "adm:fcap:set"), ("🗑 Clear", "adm:fcap:clr")])
+                  + [[ub("🚫 Remove Original: " + onoff(rem), "adm:fcap:t")]], ub("🔙 Back", "adm:settings")))
 
 
 @state("fcap")
 async def st_fcap(update, context):
     msg = update.effective_message
     text = msg.text_html if msg.text else None
-
     if not text or len(text) > 1000:
-        await msg.reply_text(
-            "⚠️ Send text up to 1000 characters.",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, "SEND TEXT UP TO 1000 CHARACTERS.")
         return
-
     await S.set("custom_caption", text)
-    context.user_data.pop("state", None)
-
-    await msg.reply_text(
-        "✅ Custom caption saved.",
-        reply_markup=K.back("fcap"),
-    )
+    await done(update, context, "✅ CUSTOM CAPTION SAVED.", "fcap")
 
 
 # ===================================================================== broadcast
 
 @action("bc")
 async def a_bc(update, context, args):
-    await ask(
-        update,
-        context,
-        "bc",
-        "📢 <b>Broadcast</b>\n\n"
-        "Send or forward the message you want to broadcast to all users.",
-    )
+    await ask(update, context, "bc", head("📢", "Broadcast", "SEND OR FORWARD THE MESSAGE FOR ALL USERS."))
 
 
 @state("bc")
 async def st_bc(update, context):
     msg = update.effective_message
     total = await db.count_broadcastable()
-
     context.user_data["bc_msg"] = (msg.chat_id, msg.message_id)
     context.user_data.pop("state", None)
-
-    await msg.reply_text(
-        f"📢 Send this message to <b>{total}</b> users?",
-        reply_to_message_id=msg.message_id,
-        reply_markup=M([
-            [B("✅ Send now", "adm:bcgo")],
-            [B("❌ Cancel", "adm:cancel")],
-        ]),
-    )
+    await msg.reply_text(head("📢", "Broadcast", f"SEND THIS MESSAGE TO <b>{total}</b> USERS?"),
+                         reply_to_message_id=msg.message_id,
+                         reply_markup=kb([[ub("✅ Send Now", "adm:bcgo")]], ub("❌ Cancel", "adm:cancel")))
 
 
 @action("bcgo")
 async def a_bcgo(update, context, args):
     data = context.user_data.pop("bc_msg", None)
-
     if not data:
-        await show(update, "⚠️ Nothing to broadcast.", K.back())
+        await show(update, "⚠️ NOTHING TO BROADCAST.", K.back())
         return
-
     q = update.callback_query
-
-    await show(update, "📢 <b>Broadcasting…</b>\n\nStarting…")
-
+    await show(update, head("📢", "Broadcast", "STARTING…"))
     context.application.create_task(
-        broadcast.run_broadcast(
-            context.bot,
-            data[0],
-            data[1],
-            q.message.chat_id,
-            q.message.message_id,
-        )
-    )
+        broadcast.run_broadcast(context.bot, data[0], data[1], q.message.chat_id, q.message.message_id))
 
 
-# ===================================================================== stats / ban / reset
-
-def _mb(b) -> str:
-    return f"{b / 1048576:.2f} MB"
-
+# ===================================================================== stats / mongo
 
 def _speed(ms) -> str:
     if ms is None:
         return "—"
-    icon = "🟢" if ms < 150 else "🟡" if ms < 500 else "🔴"
-    return f"{icon} {ms:.0f} ms"
+    return f"{'🟢' if ms < 150 else '🟡' if ms < 500 else '🔴'} {ms:.0f} ms"
 
 
 def mongo_text(m: dict, detail: bool = False) -> str:
     if not m["ok"]:
         return ("🍃 <b>MONGODB</b> ▸ 🔴 <b>NOT REACHABLE</b>\n"
-                f"<code>{html.escape(m['error'] or 'unknown error')}</code>")
+                f"<code>{esc(m['error'] or 'unknown error')}</code>")
     limit = m["limit_mb"] * 1048576
     pct = min(100.0, m["used"] / limit * 100) if limit else 0
     left = max(0, limit - m["used"])
@@ -1069,15 +708,15 @@ def mongo_text(m: dict, detail: bool = False) -> str:
     health = "🔴 ALMOST FULL" if pct >= 90 else "🟡 GETTING FULL" if pct >= 80 else "🟢 HEALTHY"
     t = (f"🍃 <b>MONGODB</b> ▸ {health}\n"
          f"{bar} <b>{pct:.1f}%</b>\n"
-         f"💾 USED ▸ <b>{_mb(m['used'])}</b> / {m['limit_mb']:g} MB\n"
-         f"🆓 LEFT ▸ <b>{_mb(left)}</b>")
+         f"💾 USED ▸ <b>{mb(m['used'])}</b> / {m['limit_mb']:g} MB\n"
+         f"🆓 LEFT ▸ <b>{mb(left)}</b>")
     if detail:
         t += (f"\n\n⚡ PING ▸ {_speed(m['ping_ms'])} · READ ▸ {_speed(m['read_ms'])}\n"
               f"📄 DOCS ▸ <b>{m['objects']}</b> · 🗂 COLLECTIONS ▸ <b>{m['collections']}</b>")
         if m.get("conn"):
             t += f"\n🔌 CONNECTIONS ▸ <b>{m['conn'].get('current')}</b> USED · {m['conn'].get('available')} FREE"
-        t += f"\n\n📦 DATA {_mb(m['data'])} · DISK {_mb(m['storage'])} · INDEX {_mb(m['index'])}\n"
-        t += "\n".join(f"• <code>{html.escape(n)}</code> ▸ {c} · {_mb(sz)}" for n, c, sz in m.get("cols", []))
+        t += f"\n\n📦 DATA {mb(m['data'])} · DISK {mb(m['storage'])} · INDEX {mb(m['index'])}\n"
+        t += "\n".join(f"• <code>{esc(n)}</code> ▸ {c} · {mb(sz)}" for n, c, sz in m.get("cols", []))
     return t
 
 
@@ -1085,91 +724,51 @@ def mongo_text(m: dict, detail: bool = False) -> str:
 async def a_stats(update, context, args):
     s = await db.stats()
     m = await db.mongo_status()
-    await show(
-        update,
-        "📊 <b>STATISTICS</b>\n\n"
-        f"👥 USERS ▸ <b>{s['users']:,}</b>\n"
-        f"📁 FILES ▸ <b>{s['files']:,}</b>\n"
-        f"🔗 LINKS ▸ <b>{s['links']:,}</b>\n"
-        f"🚫 BANNED ▸ <b>{s['banned']:,}</b>\n"
-        f"💤 BLOCKED ▸ <b>{s['blocked']:,}</b>\n\n"
-        + mongo_text(m),
-        M([
-            [K.ub("🍃 MongoDB", "adm:mongo"), K.ub("🔄 Refresh", "adm:stats")],
-            [K.ub("🔙 Back", "adm:home")],
-        ]),
-    )
+    await show(update,
+               head("📊", "Statistics",
+                    f"👥 USERS ▸ <b>{s['users']:,}</b>\n"
+                    f"📁 FILES ▸ <b>{s['files']:,}</b>\n"
+                    f"🔗 LINKS ▸ <b>{s['links']:,}</b>\n"
+                    f"🚫 BANNED ▸ <b>{s['banned']:,}</b>\n"
+                    f"💤 BLOCKED ▸ <b>{s['blocked']:,}</b>\n\n") + mongo_text(m),
+               kb(grid([("🍃 MongoDB", "adm:mongo"), ("🔄 Refresh", "adm:stats")]), ub("🔙 Back", "adm:home")))
 
 
 @action("mongo")
 async def a_mongo(update, context, args):
-    m = await db.mongo_status()
-    await show(update, mongo_text(m, detail=True),
-               M([[K.ub("🔄 Refresh", "adm:mongo"), K.ub("🔙 Back", "adm:stats")]]))
+    await show(update, mongo_text(await db.mongo_status(), detail=True),
+               kb(grid([("🔄 Refresh", "adm:mongo"), ("🔙 Back", "adm:stats")])))
 
+
+# ===================================================================== ban / reset
 
 @action("ban")
 async def a_ban(update, context, args):
     s = await db.stats()
-
-    await show(
-        update,
-        f"🚫 <b>Ban / Unban</b>\n\nCurrently banned: <b>{s['banned']}</b>",
-        M([
-            [
-                B("🚫 Ban user", "adm:banask"),
-                B("✅ Unban user", "adm:unbanask"),
-            ],
-            [B("🔙 Back", "adm:home")],
-        ]),
-    )
+    await show(update, head("🚫", "Ban / Unban", f"BANNED ▸ <b>{s['banned']}</b>"),
+               kb(grid([("🚫 Ban", "adm:banask"), ("✅ Unban", "adm:unbanask")]), ub("🔙 Back", "adm:users")))
 
 
 @action("banask")
 async def a_banask(update, context, args):
-    await ask(
-        update,
-        context,
-        "ban",
-        "🚫 <b>Ban user</b>\n\nForward a message from the user or send their ID.",
-    )
+    await ask(update, context, "ban", head("🚫", "Ban User", "FORWARD A MESSAGE FROM THE USER, OR SEND THEIR ID."))
 
 
 @action("unbanask")
 async def a_unbanask(update, context, args):
-    await ask(
-        update,
-        context,
-        "unban",
-        "✅ <b>Unban user</b>\n\nForward a message from the user or send their ID.",
-    )
+    await ask(update, context, "unban", head("✅", "Unban User", "FORWARD A MESSAGE FROM THE USER, OR SEND THEIR ID."))
 
 
 async def _ban_flow(update, context, flag: bool):
-    msg = update.effective_message
-    uid = extract_user_id(msg)
-
+    uid = extract_user_id(update.effective_message)
     if uid is None:
-        await msg.reply_text(
-            "⚠️ Couldn't read a user ID (hidden forward?). Send the numeric ID.",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, "COULD NOT READ THE USER ID. SEND IT AS DIGITS.")
         return
-
     if flag and is_admin(uid):
-        await msg.reply_text(
-            "⚠️ You can't ban an admin.",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, "ADMINS CANNOT BE BANNED.")
         return
-
     await db.set_banned(uid, flag)
-    context.user_data.pop("state", None)
-
-    await msg.reply_text(
-        f"{'🚫 Banned' if flag else '✅ Unbanned'} <code>{uid}</code>.",
-        reply_markup=K.back("ban"),
-    )
+    await done(update, context, f"{'🚫 BANNED' if flag else '✅ UNBANNED'} ▸ <code>{uid}</code>", "ban")
 
 
 @state("ban")
@@ -1184,44 +783,28 @@ async def st_unban(update, context):
 
 @action("reset")
 async def a_reset(update, context, args):
-    await show(
-        update,
-        "♻️ <b>Reset Settings</b>\n\n"
-        "All settings will be restored to default.\n"
-        "Admins and the Database Channel are kept.\n\n"
-        "<b>Do you want to continue?</b>",
-        M([
-            [
-                B("✅ Yes, reset", "adm:resetyes"),
-                B("❌ No", "adm:home"),
-            ]
-        ]),
-    )
+    await show(update,
+               head("♻️", "Reset Settings", "ALL SETTINGS RETURN TO DEFAULT.\n"
+                                            "ADMINS AND DATABASE CHANNEL ARE KEPT.\n\n<b>CONTINUE?</b>"),
+               K.confirm("adm:resetyes", "adm:settings", "✅ Yes, Reset"))
 
 
 @action("resetyes")
 async def a_resetyes(update, context, args):
     await S.reset()
-    await show(update, "✅ Settings have been reset.", K.back())
+    await show(update, "✅ SETTINGS RESET.", K.back("settings"))
 
 
 # ===================================================================== ads (Monetag Mini App)
 
-def _ago(ts) -> str:
-    if not ts:
-        return "never"
-    d = int(time.time() - ts)
-    return f"{d}s ago" if d < 90 else f"{d // 60} min ago" if d < 5400 else f"{d // 3600} h ago"
-
-
 @action("ads")
 async def a_ads(update, context, args):
-    note = ""
+    msg = ""
     a = args[0] if args else ""
 
     if a == "t":
         if not S.get("ads_enabled") and not ads.zone():
-            note = "⚠️ SET THE ZONE ID FIRST.\n\n"
+            msg = "⚠️ SET THE ZONE ID FIRST."
         else:
             await S.set("ads_enabled", not S.get("ads_enabled"))
     elif a == "pb":
@@ -1233,7 +816,7 @@ async def a_ads(update, context, args):
     elif a == "newsec":
         await S.set("ads_secret", "")
         await ads.ensure_secret()
-        await show_postback(update, "🔑 NEW SECRET CREATED. PASTE THE NEW URL IN MONETAG.\n\n")
+        await show_postback(update, "🔑 NEW SECRET CREATED. PASTE THE NEW URL IN MONETAG.")
         return
     elif a == "pburl":
         await show_postback(update)
@@ -1243,214 +826,149 @@ async def a_ads(update, context, args):
         return
     elif a == "zone":
         await ask(update, context, "ads_zone",
-                  f"✏️ <b>ZONE ID</b>\n\nNOW: <code>{html.escape(ads.zone()) or 'NOT SET'}</code>\n\n"
-                  "SEND YOUR MAIN <b>SDK ZONE ID</b> (DIGITS ONLY).")
+                  head("✏️", "Zone ID", f"NOW ▸ <code>{esc(ads.zone()) or 'NOT SET'}</code>\n\n"
+                                        "SEND YOUR MAIN <b>SDK ZONE ID</b> (DIGITS ONLY)."))
         return
     elif a == "sdk":
         await ask(update, context, "ads_sdk",
-                  f"🔗 <b>SDK URL</b>\n\nNOW: <code>{html.escape(ads.sdk_url())}</code>\n\n"
-                  "SEND THE <code>src</code> OF THE SCRIPT TAG FROM YOUR MONETAG CODE.")
+                  head("🔗", "SDK URL", f"NOW ▸ <code>{esc(ads.sdk_url())}</code>\n\n"
+                                        "SEND THE <code>src</code> OF THE SCRIPT TAG FROM YOUR MONETAG CODE."))
         return
 
     on = S.get("ads_enabled")
-    warn = ""
+    warns = []
     if not ads.mini_app_ready():
-        warn += "\n⚠️ BASE_URL MUST BE A PUBLIC HTTPS URL."
+        warns.append("BASE_URL MUST BE A PUBLIC HTTPS URL.")
     if not ads.zone():
-        warn += "\n⚠️ ZONE ID IS NOT SET."
+        warns.append("ZONE ID IS NOT SET.")
     if on and S.get("ads_postback") and not S.get("ads_last_postback"):
-        warn += "\n⚠️ NO POSTBACK YET. PASTE THE URL IN MONETAG."
+        warns.append("NO POSTBACK YET. PASTE THE URL IN MONETAG.")
     if not S.get("ads_postback"):
-        warn += "\n⚠️ SERVER VERIFY IS OFF. KEEP IT ON."
+        warns.append("SERVER VERIFY IS OFF. KEEP IT ON.")
 
     def st(key):
-        return "ON" if S.get(key) else "OFF"
+        return onoff(S.get(key))
 
-    await show(
-        update,
-        f"{note}📺 <b>ADS</b>\n\nSELECT AN OPTION TO MANAGE ADS." + warn,
-        M([
-            [K.ub("🔕 Turn OFF" if on else "🔔 Turn ON", "adm:ads:t")],
-            [K.ub("✏️ Zone ID", "adm:ads:zone"), K.ub("🔗 SDK URL", "adm:ads:sdk")],
-            [K.ub(f"🛰 Verify: {st('ads_postback')}", "adm:ads:pb"), K.ub(f"🛡 AdBlock: {st('ads_block_adblock')}", "adm:ads:ab")],
-            [K.ub(f"🧪 Test: {st('ads_admin_test')}", "adm:ads:tst"), K.ub("🔑 New Secret", "adm:ads:newsec")],
-            [K.ub("📡 Postback URL", "adm:ads:pburl"), K.ub("📈 Ad Stats", "adm:ads:stat")],
-            [K.ub("🔙 Back", "adm:monet")],
-        ]),
-    )
+    await show(update,
+               note(msg) + head("📺", "Ads", "SELECT AN OPTION TO MANAGE ADS.")
+               + "".join(f"\n⚠️ {w}" for w in warns),
+               kb([[ub("🔕 Turn OFF" if on else "🔔 Turn ON", "adm:ads:t")]]
+                  + grid([("✏️ Zone ID", "adm:ads:zone"), ("🔗 SDK URL", "adm:ads:sdk"),
+                          (f"🛰 Verify: {st('ads_postback')}", "adm:ads:pb"),
+                          (f"🛡 AdBlock: {st('ads_block_adblock')}", "adm:ads:ab"),
+                          (f"🧪 Test: {st('ads_admin_test')}", "adm:ads:tst"), ("🔑 New Secret", "adm:ads:newsec"),
+                          ("📡 Postback URL", "adm:ads:pburl"), ("📈 Ad Stats", "adm:ads:stat")]),
+                  ub("🔙 Back", "adm:monet")))
 
 
-async def show_postback(update, note: str = ""):
-    await show(
-        update,
-        f"{note}📡 <b>POSTBACK URL</b>\n\nMONETAG → SDK ZONE → POSTBACK URL:\n"
-        f"<code>{html.escape(await ads.postback_url())}</code>\n\n"
-        "MONETAG → TELEGRAM MINI APP URL:\n"
-        f"<code>{html.escape(config.BASE_URL or 'BASE_URL NOT SET')}</code>",
-        M([[K.ub("🔑 New Secret", "adm:ads:newsec"), K.ub("🔙 Back", "adm:ads")]]),
-    )
+async def show_postback(update, msg: str = ""):
+    await show(update,
+               note(msg) + head("📡", "Postback URL",
+                                "MONETAG → SDK ZONE → POSTBACK URL:\n"
+                                f"<code>{esc(await ads.postback_url())}</code>\n\n"
+                                "MONETAG → TELEGRAM MINI APP URL:\n"
+                                f"<code>{esc(config.BASE_URL or 'BASE_URL NOT SET')}</code>"),
+               kb(grid([("🔑 New Secret", "adm:ads:newsec"), ("🔙 Back", "adm:ads")])))
 
 
 async def show_ads_stats(update):
     st = await ads.get_stats()
-    await show(
-        update,
-        "📈 <b>AD STATS</b>\n\n"
-        f"✅ VERIFIED ▸ <b>{st.get('verified', 0)}</b>\n"
-        f"🎁 FREE FILES ▸ <b>{st.get('fallback', 0)}</b>\n"
-        f"🚫 BLOCKED ▸ <b>{st.get('blocked', 0)}</b>\n\n"
-        f"🛰 LAST POSTBACK ▸ <b>{_ago(S.get('ads_last_postback')).upper()}</b>\n"
-        f"🔁 NO-FILL TRIES ▸ <b>{S.get('ads_tries')}</b> (MAX {ads.FALLBACK_DAILY} / USER / DAY)",
-        M([[K.ub("🔄 Refresh", "adm:ads:stat"), K.ub("🔙 Back", "adm:ads")]]),
-    )
+    await show(update,
+               head("📈", "Ad Stats",
+                    f"✅ VERIFIED ▸ <b>{st.get('verified', 0)}</b>\n"
+                    f"🎁 FREE FILES ▸ <b>{st.get('fallback', 0)}</b>\n"
+                    f"🚫 BLOCKED ▸ <b>{st.get('blocked', 0)}</b>\n\n"
+                    f"🛰 LAST POSTBACK ▸ <b>{ago(S.get('ads_last_postback'))}</b>\n"
+                    f"🔁 NO-FILL TRIES ▸ <b>{S.get('ads_tries')}</b> (MAX {ads.FALLBACK_DAILY} / USER / DAY)"),
+               kb(grid([("🔄 Refresh", "adm:ads:stat"), ("🔙 Back", "adm:ads")])))
 
 
 @state("ads_zone")
 async def st_ads_zone(update, context):
-    msg = update.effective_message
-    z = (msg.text or "").strip()
+    z = (update.effective_message.text or "").strip()
     if not re.fullmatch(r"\d{3,14}", z):
-        await msg.reply_text("⚠️ SEND THE ZONE ID AS DIGITS ONLY.", reply_markup=K.cancel())
+        await warn(update, "SEND THE ZONE ID AS DIGITS ONLY.")
         return
     await S.set("ads_zone", z)
-    context.user_data.pop("state", None)
-    await msg.reply_text(f"✅ ZONE ID SAVED: <code>{z}</code>", reply_markup=K.back("ads"))
+    await done(update, context, f"✅ ZONE ID SAVED ▸ <code>{z}</code>", "ads")
 
 
 @state("ads_sdk")
 async def st_ads_sdk(update, context):
-    msg = update.effective_message
-    u = (msg.text or "").strip()
+    u = (update.effective_message.text or "").strip()
     if u.startswith("//"):
         u = "https:" + u
     if not re.fullmatch(r"https://[^\s'\"<>]+", u):
-        await msg.reply_text("⚠️ SEND A VALID HTTPS URL.", reply_markup=K.cancel())
+        await warn(update, "SEND A VALID HTTPS URL.")
         return
     await S.set("ads_sdk_url", u)
-    context.user_data.pop("state", None)
-    await msg.reply_text("✅ SDK URL SAVED.", reply_markup=K.back("ads"))
+    await done(update, context, "✅ SDK URL SAVED.", "ads")
 
 
 # ===================================================================== batch + links
 
+async def _need_db_channel(update):
+    await show(update, "⚠️ SET THE DATABASE CHANNEL FIRST.", kb([[ub("📡 DB Channel", "adm:dbch")]], ub("🔙 Back", "adm:batch")))
+
+
 @action("batch")
 async def a_batch(update, context, args):
-    await show(
-        update,
-        "📦 <b>Create Batch</b>\n\nOne link for many files. Choose how:",
-        M([
-            [B("📥 Send files, then tap Done", "adm:batchstart")],
-            [B("🔢 First + last post from DB channel", "adm:range")],
-            [B("🔙 Back", "adm:home")],
-        ]),
-    )
+    await show(update, head("📦", "Create Batch", "ONE LINK FOR MANY FILES."),
+               kb(grid([("📥 Send Files", "adm:batchstart"), ("🔢 Post Range", "adm:range")]), ub("🔙 Back", "adm:home")))
 
 
 @action("batchstart")
 async def a_batchstart(update, context, args):
     if not S.get("db_channel"):
-        await show(
-            update,
-            "⚠️ Set the Database Channel first.",
-            M([[B("📡 Set Database Channel", "adm:dbch")]]),
-        )
+        await _need_db_channel(update)
         return
-
     q = update.callback_query
-
     context.user_data.update(
         state="batch",
         batch_ids=[],
         batch_token=db.new_token(),   # same token is written in every file's backup caption code
         batch_status=(q.message.chat_id, q.message.message_id),
     )
-
-    await show(
-        update,
-        "📦 <b>Batch mode</b>\n\n"
-        "Send your files, then tap <b>Done</b>.",
-        K.batch_kb(),
-    )
+    await show(update, head("📦", "Batch Mode", "SEND YOUR FILES, THEN TAP <b>DONE</b>."), K.batch_kb())
 
 
 @action("batchdone")
 async def a_batchdone(update, context, args):
     q = update.callback_query
-
     # wait until every file that was sent before "Done" has finished uploading
     async with upload.batch_lock(update.effective_user.id):
         ids = sorted(set(context.user_data.get("batch_ids", [])))
-
         if not ids:
-            await q.answer("Please send at least one file first.", show_alert=True)
+            await q.answer("SEND AT LEAST ONE FILE FIRST.", show_alert=True)
             return
-
         await q.answer()
-
-        token = await db.create_link(
-            ids,
-            update.effective_user.id,
-            f"Batch ({len(ids)} files)",
-            token=context.user_data.get("batch_token"),
-        )
-
+        token = await db.create_link(ids, update.effective_user.id, f"Batch ({len(ids)} files)",
+                                     token=context.user_data.get("batch_token"))
         for k in TEMP_KEYS:
             context.user_data.pop(k, None)
-
-    await show(
-        update,
-        f"📦 Batch closed with <b>{len(ids)}</b> files.",
-        K.back(),
-    )
-
-    await upload.announce_link(
-        context,
-        q.message.chat_id,
-        token,
-        len(ids),
-        f"Batch ({len(ids)} files)",
-    )
+    await show(update, f"✅ BATCH CLOSED ▸ <b>{len(ids)}</b> FILES.", K.back())
+    await upload.announce_link(context, q.message.chat_id, token, len(ids), f"Batch ({len(ids)} files)")
 
 
 @action("range")
 async def a_range(update, context, args):
     if not S.get("db_channel"):
-        await show(
-            update,
-            "⚠️ Set the Database Channel first.",
-            M([[B("📡 Set Database Channel", "adm:dbch")]]),
-        )
+        await _need_db_channel(update)
         return
-
-    await ask(
-        update,
-        context,
-        "range_first",
-        "🔢 <b>Batch by range</b>\n\n"
-        "Step 1/2: forward the <b>first</b> post from the Database Channel, or send its link.",
-    )
+    await ask(update, context, "range_first",
+              head("🔢", "Post Range", "STEP 1/2 ▸ FORWARD THE <b>FIRST</b> POST FROM THE DATABASE CHANNEL, OR SEND ITS LINK."))
 
 
 @state("range_first")
 async def st_range_first(update, context):
-    msg = update.effective_message
-    pid = extract_post_id(msg, S.get("db_channel")["id"])
-
+    pid = extract_post_id(update.effective_message, S.get("db_channel")["id"])
     if pid is None:
-        await msg.reply_text(
-            "⚠️ This is not a post from the Database Channel.\n"
-            "Forward the post or send its link.",
-            reply_markup=K.cancel(),
-        )
+        await warn(update, "NOT A DATABASE CHANNEL POST. FORWARD IT OR SEND ITS LINK.")
         return
-
     context.user_data["range_first"] = pid
     context.user_data["state"] = "range_last"
-
-    await msg.reply_text(
-        "Step 2/2: now forward the <b>LAST</b> message of the range.",
-        reply_markup=K.cancel(),
-    )
+    await update.effective_message.reply_text("STEP 2/2 ▸ FORWARD THE <b>LAST</b> POST OF THE RANGE.",
+                                              reply_markup=K.cancel())
 
 
 @state("range_last")
@@ -1458,38 +976,15 @@ async def st_range_last(update, context):
     msg = update.effective_message
     last = extract_post_id(msg, S.get("db_channel")["id"])
     first = context.user_data.get("range_first")
-
-    if (
-        last is None
-        or first is None
-        or last < first
-        or last - first + 1 > MAX_RANGE
-    ):
-        await msg.reply_text(
-            f"⚠️ Send a last post that comes after the first one (max {MAX_RANGE} posts).",
-            reply_markup=K.cancel(),
-        )
+    if last is None or first is None or last < first or last - first + 1 > MAX_RANGE:
+        await warn(update, f"SEND A LAST POST AFTER THE FIRST ONE (MAX {MAX_RANGE} POSTS).")
         return
-
     ids = list(range(first, last + 1))
     label = f"Range {first}-{last}"
-
-    token = await db.create_link(
-        ids,
-        update.effective_user.id,
-        label,
-    )
-
+    token = await db.create_link(ids, update.effective_user.id, label)
     for k in TEMP_KEYS:
         context.user_data.pop(k, None)
-
-    await upload.announce_link(
-        context,
-        msg.chat_id,
-        token,
-        len(ids),
-        label,
-    )
+    await upload.announce_link(context, msg.chat_id, token, len(ids), label)
 
 
 @action("links")
@@ -1497,77 +992,30 @@ async def a_links(update, context, args):
     page = int(args[0]) if args else 0
     uid = update.effective_user.id
     creator = None if is_owner(uid) else uid
-
     total = await db.count_links(creator)
-    rows = await db.list_links(page * PAGE, PAGE, creator)
-
-    kb = [
-        [
-            B(
-                f"🔗 {r['label'][:28]} · {r['views']}👁",
-                f"adm:lk:{r['_id']}",
-            )
-        ]
-        for r in rows
-    ]
-
-    nav = []
-
-    if page > 0:
-        nav.append(B("⬅️ Prev", f"adm:links:{page - 1}"))
-
-    if (page + 1) * PAGE < total:
-        nav.append(B("Next ➡️", f"adm:links:{page + 1}"))
-
-    if nav:
-        kb.append(nav)
-
-    kb.append([B("🔙 Back", "adm:home")])
-
-    await show(
-        update,
-        (
-            f"🔗 <b>My Links</b> ({total})\n\nTap a link to view or revoke it."
-            if total
-            else "🔗 <b>My Links</b>\n\n"
-                 "No links yet. Send a file to create one."
-        ),
-        M(kb),
-    )
+    rows = [[nm(f"🔗 {r['label'][:28]} · {r['views']}👁", f"adm:lk:{r['_id']}")]
+            for r in await db.list_links(page * PAGE, PAGE, creator)]
+    rows.append(pager(page, -(-total // PAGE), "adm:links"))
+    await show(update,
+               head("🔗", "My Links", f"TOTAL ▸ <b>{total}</b>\n\nTAP A LINK TO VIEW OR REVOKE IT." if total
+                    else "NO LINKS YET. SEND A FILE TO CREATE ONE."),
+               kb(rows, ub("🔙 Back", "adm:home")))
 
 
 @action("lk")
 async def a_lk(update, context, args):
     link = await db.get_link(args[0])
-
     if not link:
-        await show(
-            update,
-            "⚠️ Link not found (already revoked?).",
-            K.back("links"),
-        )
+        await show(update, "⚠️ LINK NOT FOUND. IT MAY BE REVOKED.", K.back("links"))
         return
-
-    url = share_link(context.bot.username, link["_id"])
-
-    await show(
-        update,
-        f"🔗 <b>{html.escape(link['label'])}</b>\n"
-        f"📁 Files: {len(link['ids'])}\n"
-        f"👁 Views: {link['views']}\n\n"
-        f"<code>{url}</code>",
-        M([
-            [B("🗑 Revoke link", f"adm:lkdel:{link['_id']}")],
-            [B("🔙 Back", "adm:links")],
-        ]),
-    )
+    await show(update,
+               f"🔗 <b>{esc(link['label'])}</b>\n\n"
+               f"📁 FILES ▸ <b>{len(link['ids'])}</b> · 👁 VIEWS ▸ <b>{link['views']}</b>\n\n"
+               f"<code>{share_link(context.bot.username, link['_id'])}</code>",
+               kb([[ub("🗑 Revoke", f"adm:lkdel:{link['_id']}")]], ub("🔙 Back", "adm:links")))
 
 
 @action("lkdel")
 async def a_lkdel(update, context, args):
     await db.delete_link(args[0])
-    await show(
-        update,
-        "🗑 Link revoked. It no longer works.",
-        K.back("links"),
-    )
+    await show(update, "🗑 LINK REVOKED. IT NO LONGER WORKS.", K.back("links"))

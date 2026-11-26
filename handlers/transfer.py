@@ -2,51 +2,34 @@
 handlers/transfer.py
 🔄 Transfer screen of the admin panel (owner only).
 
-  Panel -> 🔄 Transfer
-      🔐 Login           phone + code (+ 2-step password) of YOUR Telegram account, or paste a session string
-      🚀 New transfer    pick source (private channel / group / chat) -> destination (channel, chat, Saved
-                         Messages) -> everything is copied with captions, no "Forwarded from" tag
-      ⏸ Pause / ▶️ Resume / ⏹ Stop / ❌ Cancel, live speed, per-type counts (videos, photos, files, text ...),
-                         "not forwarded" list + retry
-      🗑 Delete          remove everything that was copied into a chat (or wipe a whole chat) in one go
+  Panel -> Servers -> Transfer
+      Login          phone + code (+ 2-step password) of YOUR Telegram account, or a session string
+      New Transfer   source -> destination -> everything is copied with captions, no "Forwarded from" tag
+      Job screen     pause / resume / stop / cancel, live speed, per-type counts, failed list + retry
+      Cleanup        delete what was copied into a chat (or wipe a whole chat) in one go
 
 The copy itself runs on Telegram's servers (see utils/transfer.py), so it is fast and uses almost no RAM.
 """
 import asyncio
-import html
 import logging
 import re
 
-from telegram import InlineKeyboardMarkup as M
-
-from handlers.admin import B as _B, action, ask, show, state
+from handlers.admin import action, ask, show, state
 from utils import keyboards as K
 from utils import transfer as T
 from utils.helpers import owner_only
+from utils.keyboards import grid, kb, nm, pager, ub
+from utils.ui import bar as _bar, esc as _esc, head
 
 log = logging.getLogger(__name__)
-
-
-def B(text, data):
-    """Panel button style: CAPS label."""
-    return _B(text.upper(), data)
-
+B = ub          # CAPS panel button; chat titles use nm()
 
 PER_PAGE = 8
 _watchers: dict = {}
 
 
-def _esc(s) -> str:
-    return html.escape(str(s))
-
-
 def _short(s: str, n: int = 34) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
-
-
-def _bar(p: float, n: int = 12) -> str:
-    f = int(round(p / 100 * n))
-    return "█" * f + "░" * (n - f)
 
 
 def _t(sec) -> str:
@@ -70,7 +53,7 @@ async def _wipe(update):
 async def a_tr(update, context, args):
     bad = T.available()
     if bad:
-        await show(update, f"🔄 <b>TRANSFER</b>\n\n⚠️ {_esc(bad)}", K.back("servers"))
+        await show(update, head("🔄", "Transfer", f"⚠️ {_esc(bad)}"), K.back("servers"))
         return
     client = await T.session.ensure()
     job = T.CURRENT
@@ -78,15 +61,15 @@ async def a_tr(update, context, args):
         me = T.session.me
         who = f"{_esc(me.first_name or '')} {('@' + _esc(me.username)) if me.username else ''}".strip()
         line = f"✅ LOGGED IN ▸ <b>{who}</b>"
-        rows = [[B("🚀 New Transfer", "adm:trnew"), B("🗑 Cleanup", "adm:trcl")]]
+        items = [("🚀 New Transfer", "adm:trnew"), ("🗑 Cleanup", "adm:trcl")]
         if job:
-            rows.append([B("📊 Current Job", "adm:trjob")])
-        rows.append([B("🚪 Logout", "adm:trout")])
+            items.append(("📊 Current Job", "adm:trjob"))
+        items.append(("🚪 Logout", "adm:trout"))
     else:
         line = "❌ NOT LOGGED IN"
-        rows = [[B("📱 Phone Login", "adm:trlogin"), B("🔑 Session", "adm:trsess")]]
-    rows.append([B("🔙 Back", "adm:servers")])
-    await show(update, f"🔄 <b>TRANSFER</b>\n\nCOPY FILES BETWEEN CHATS, NO FORWARD TAG.\n\n{line}", M(rows))
+        items = [("📱 Phone Login", "adm:trlogin"), ("🔑 Session", "adm:trsess")]
+    await show(update, head("🔄", "Transfer", f"COPY FILES BETWEEN CHATS, NO FORWARD TAG.\n\n{line}"),
+               kb(grid(items), B("🔙 Back", "adm:servers")))
 
 
 # ===================================================================== login
@@ -94,8 +77,8 @@ async def a_tr(update, context, args):
 @owner_only
 async def a_trlogin(update, context, args):
     await ask(update, context, "tr_phone",
-              "📱 Send the phone number of the account that is a member of the source channel,\n"
-              "with country code, e.g. <code>+919876543210</code>")
+              head("📱", "Phone Login", "SEND THE PHONE NUMBER OF AN ACCOUNT THAT IS IN THE SOURCE CHAT,\n"
+                                        "WITH COUNTRY CODE: <code>+919876543210</code>"))
 
 
 @state("tr_phone")
@@ -104,7 +87,7 @@ async def st_phone(update, context):
     phone = (update.effective_message.text or "").strip().replace(" ", "")
     await _wipe(update)
     if not re.fullmatch(r"\+?\d{8,15}", phone):
-        await update.effective_chat.send_message("⚠️ Invalid number. Example: <code>+919876543210</code>",
+        await update.effective_chat.send_message("⚠️ INVALID NUMBER. EXAMPLE ▸ <code>+919876543210</code>",
                                                  reply_markup=K.cancel())
         return
     phone = phone if phone.startswith("+") else "+" + phone
@@ -113,14 +96,14 @@ async def st_phone(update, context):
     except Exception as e:
         log.exception("send_code failed")
         context.user_data.pop("state", None)
-        await update.effective_chat.send_message(f"⚠️ Could not send the code: <code>{_esc(type(e).__name__)}</code>",
+        await update.effective_chat.send_message(f"⚠️ CODE NOT SENT ▸ <code>{_esc(type(e).__name__)}</code>",
                                                  reply_markup=K.back("tr"))
         return
     context.user_data["state"] = "tr_code"
     await update.effective_chat.send_message(
-        "💬 Telegram sent a login code to that account (check the Telegram app).\n\n"
-        "Send it <b>with spaces between the digits</b>, e.g. <code>1 2 3 4 5</code>\n"
-        "<i>(Telegram blocks the login if the code is sent as one plain number.)</i>",
+        head("💬", "Login Code", "CHECK THE TELEGRAM APP, THEN SEND THE CODE\n"
+                                 "<b>WITH SPACES</b> BETWEEN DIGITS: <code>1 2 3 4 5</code>\n"
+                                 "<i>TELEGRAM BLOCKS A CODE SENT AS ONE NUMBER.</i>"),
         reply_markup=K.cancel())
 
 
@@ -135,19 +118,19 @@ async def st_code(update, context):
         name = type(e).__name__
         if name == "SessionPasswordNeeded":
             context.user_data["state"] = "tr_pw"
-            await update.effective_chat.send_message("🔒 This account has a 2-step password. Send it now.",
+            await update.effective_chat.send_message(head("🔒", "2-Step Password", "SEND THE ACCOUNT PASSWORD."),
                                                      reply_markup=K.cancel())
             return
         if name in ("PhoneCodeInvalid", "PhoneCodeEmpty"):
-            await update.effective_chat.send_message("⚠️ Wrong code, try again.", reply_markup=K.cancel())
+            await update.effective_chat.send_message("⚠️ WRONG CODE. TRY AGAIN.", reply_markup=K.cancel())
             return
         context.user_data.pop("state", None)
-        msg = "⚠️ Code expired. Start the login again." if name == "PhoneCodeExpired" else \
-              f"⚠️ Login failed: <code>{_esc(name)}</code>"
+        msg = "⚠️ CODE EXPIRED. START THE LOGIN AGAIN." if name == "PhoneCodeExpired" else \
+              f"⚠️ LOGIN FAILED ▸ <code>{_esc(name)}</code>"
         await update.effective_chat.send_message(msg, reply_markup=K.back("tr"))
         return
     context.user_data.pop("state", None)
-    await update.effective_chat.send_message("✅ Logged in.", reply_markup=K.back("tr"))
+    await update.effective_chat.send_message("✅ LOGGED IN.", reply_markup=K.back("tr"))
 
 
 @state("tr_pw")
@@ -159,22 +142,21 @@ async def st_pw(update, context):
         await T.session.check_password(pw)
     except Exception as e:
         if type(e).__name__ == "PasswordHashInvalid":
-            await update.effective_chat.send_message("⚠️ Wrong password, try again.", reply_markup=K.cancel())
+            await update.effective_chat.send_message("⚠️ WRONG PASSWORD. TRY AGAIN.", reply_markup=K.cancel())
             return
         context.user_data.pop("state", None)
-        await update.effective_chat.send_message(f"⚠️ Login failed: <code>{_esc(type(e).__name__)}</code>",
+        await update.effective_chat.send_message(f"⚠️ LOGIN FAILED ▸ <code>{_esc(type(e).__name__)}</code>",
                                                  reply_markup=K.back("tr"))
         return
     context.user_data.pop("state", None)
-    await update.effective_chat.send_message("✅ Logged in.", reply_markup=K.back("tr"))
+    await update.effective_chat.send_message("✅ LOGGED IN.", reply_markup=K.back("tr"))
 
 
 @action("trsess")
 @owner_only
 async def a_trsess(update, context, args):
     await ask(update, context, "tr_sess",
-              "🔑 Paste a <b>Pyrogram session string</b> of your account.\n"
-              "<i>The message is deleted right after it is read.</i>")
+              head("🔑", "Session", "PASTE A <b>PYROGRAM SESSION STRING</b>.\n<i>THE MESSAGE IS DELETED RIGHT AFTER.</i>"))
 
 
 @state("tr_sess")
@@ -185,18 +167,18 @@ async def st_sess(update, context):
     try:
         await T.session.start(s)
     except Exception as e:
-        await update.effective_chat.send_message(f"⚠️ Session rejected: <code>{_esc(type(e).__name__)}</code>",
+        await update.effective_chat.send_message(f"⚠️ SESSION REJECTED ▸ <code>{_esc(type(e).__name__)}</code>",
                                                  reply_markup=K.cancel())
         return
     context.user_data.pop("state", None)
-    await update.effective_chat.send_message("✅ Logged in.", reply_markup=K.back("tr"))
+    await update.effective_chat.send_message("✅ LOGGED IN.", reply_markup=K.back("tr"))
 
 
 @action("trout")
 @owner_only
 async def a_trout(update, context, args):
-    await show(update, "🚪 Logout this account from the bot?\n<i>The saved session is deleted.</i>",
-               M([[B("✅ Yes, logout", "adm:trouty")], [B("🔙 Back", "adm:tr")]]))
+    await show(update, head("🚪", "Logout", "REMOVE THIS ACCOUNT FROM THE BOT?\n<i>THE SAVED SESSION IS DELETED.</i>"),
+               K.confirm("adm:trouty", "adm:tr", "✅ Yes, Logout", "❌ No"))
 
 
 @action("trouty")
@@ -224,17 +206,9 @@ def _page(items: list, page: int, pick: str, nav: str, extra: list):
     rows = list(extra)
     for i in range(page * PER_PAGE, min(len(items), (page + 1) * PER_PAGE)):
         _id, title, icon = items[i]
-        rows.append([_B(f"{icon} {_short(title)}", f"adm:{pick}:{i}")])
-    if n > 1:
-        nav_row = []
-        if page > 0:
-            nav_row.append(B("⬅️ Prev", f"adm:{nav}:{page - 1}"))
-        nav_row.append(B(f"{page + 1}/{n}", "adm:noop"))
-        if page < n - 1:
-            nav_row.append(B("Next ➡️", f"adm:{nav}:{page + 1}"))
-        rows.append(nav_row)
-    rows.append([B("🔙 Back", "adm:tr")])
-    return M(rows)
+        rows.append([nm(f"{icon} {_short(title)}", f"adm:{pick}:{i}")])
+    rows.append(pager(page, n, f"adm:{nav}"))
+    return kb(rows, B("🔙 Back", "adm:tr"))
 
 
 async def _dialogs(context, refresh=False):
@@ -248,17 +222,17 @@ async def _dialogs(context, refresh=False):
 @owner_only
 async def a_trnew(update, context, args):
     if T.busy():
-        await show(update, "⚠️ A transfer is already running.", M([[B("📊 Open it", "adm:trjob")], [B("🔙 Back", "adm:tr")]]))
+        await show(update, "⚠️ A TRANSFER IS ALREADY RUNNING.", kb([[B("📊 Open", "adm:trjob")]], B("🔙 Back", "adm:tr")))
         return
     if T.clean_busy():
-        await show(update, "⚠️ A delete job is running.", M([[B("📊 Open it", "adm:trclj")], [B("🔙 Back", "adm:tr")]]))
+        await show(update, "⚠️ A DELETE JOB IS RUNNING.", kb([[B("📊 Open", "adm:trclj")]], B("🔙 Back", "adm:tr")))
         return
     if not await T.session.ensure():
         await a_tr(update, context, args)
         return
     for k in ("tr_src", "tr_dst", "tr_from"):
         context.user_data.pop(k, None)
-    await show(update, "⏳ Loading your chats…")
+    await show(update, "⏳ LOADING YOUR CHATS…")
     await a_trsp(update, context, ["0", "1"])
 
 
@@ -269,8 +243,8 @@ async def a_trsp(update, context, args):
     items = await _dialogs(context, refresh=bool(len(args) > 1))
     context.user_data["state"] = "tr_src_in"
     await show(update,
-               "📤 <b>Step 1/2 - SOURCE</b>\n\nTap the channel / chat to copy FROM, or send its link, @username or ID.\n"
-               "<i>Your account must be a member.</i>",
+               head("📤", "Source", "STEP 1/2 ▸ TAP THE CHAT TO COPY <b>FROM</b>, OR SEND ITS LINK, @USERNAME OR ID.\n"
+                                    "<i>YOUR ACCOUNT MUST BE A MEMBER.</i>"),
                _page(items, page, "trsrc", "trsp", []))
 
 
@@ -294,7 +268,7 @@ async def st_src_in(update, context):
         chat = await T.resolve_chat(await T.session.ensure(), update.effective_message.text)
     except Exception as e:
         await update.effective_chat.send_message(
-            f"⚠️ Cannot open that chat (<code>{_esc(type(e).__name__)}</code>). Is your account a member?",
+            f"⚠️ CANNOT OPEN THAT CHAT ▸ <code>{_esc(type(e).__name__)}</code>. IS YOUR ACCOUNT A MEMBER?",
             reply_markup=K.cancel())
         return
     await _set_chat(update, context, "tr_src", chat.id, T.chat_title(chat))
@@ -307,8 +281,8 @@ async def _ask_dst(update, context, page: int):
     src = context.user_data["tr_src"][1]
     extra = [[B("💾 Saved Messages", "adm:trdst:me")]]
     await show(update,
-               f"📥 <b>Step 2/2 - DESTINATION</b>\n\nFrom: <b>{_esc(src)}</b>\n\n"
-               "Tap where to copy TO (your account needs permission to post), or send its link, @username or ID.",
+               head("📥", "Destination", f"STEP 2/2 ▸ TAP WHERE TO COPY <b>TO</b>, OR SEND ITS LINK, @USERNAME OR ID.\n"
+                                         f"FROM ▸ <b>{_esc(src)}</b>"),
                _page(items, page, "trdst", "trdp", extra))
 
 
@@ -337,7 +311,7 @@ async def st_dst_in(update, context):
         chat = await T.resolve_chat(await T.session.ensure(), update.effective_message.text)
     except Exception as e:
         await update.effective_chat.send_message(
-            f"⚠️ Cannot open that chat (<code>{_esc(type(e).__name__)}</code>).", reply_markup=K.cancel())
+            f"⚠️ CANNOT OPEN THAT CHAT ▸ <code>{_esc(type(e).__name__)}</code>", reply_markup=K.cancel())
         return
     title = "Saved Messages" if chat.id == T.session.me.id else T.chat_title(chat)
     await _set_chat(update, context, "tr_dst", chat.id, title)
@@ -348,27 +322,24 @@ async def _confirm(update, context):
     context.user_data.pop("state", None)
     (sid, stitle), (did, dtitle) = context.user_data["tr_src"], context.user_data["tr_dst"]
     if sid == did:
-        await show(update, "⚠️ Source and destination are the same chat.", K.back("trnew"))
+        await show(update, "⚠️ SOURCE AND DESTINATION ARE THE SAME CHAT.", K.back("trnew"))
         return
     last = await T.last_progress(sid, did)
-    rows = [[B("🚀 Start - copy everything", "adm:trgo:0")]]
+    items = [("🚀 Start", "adm:trgo:0"), ("🔢 From ID", "adm:trfrom")]
     note = ""
     if last:
-        rows.insert(0, [B(f"⏯ Resume after message #{last}", f"adm:trgo:{last + 1}")])
-        note = f"\n\n⏯ An earlier run reached message <b>#{last}</b>."
-    rows.append([B("🔢 Start from message ID…", "adm:trfrom")])
-    rows.append([B("❌ Cancel", "adm:cancel")])
+        items.insert(0, (f"⏯ Resume #{last}", f"adm:trgo:{last + 1}"))
+        note = f"\n⏯ LAST RUN REACHED MESSAGE <b>#{last}</b>."
     await show(update,
-               "🔄 <b>Ready</b>\n\n"
-               f"📤 From: <b>{_esc(stitle)}</b>\n📥 To: <b>{_esc(dtitle)}</b>\n\n"
-               "Everything is copied in order with captions, without the forward tag." + note,
-               M(rows))
+               head("🔄", "Ready", f"📤 FROM ▸ <b>{_esc(stitle)}</b>\n📥 TO ▸ <b>{_esc(dtitle)}</b>\n\n"
+                                   "COPIED IN ORDER WITH CAPTIONS, NO FORWARD TAG." + note),
+               kb(grid(items), B("❌ Cancel", "adm:cancel")))
 
 
 @action("trfrom")
 @owner_only
 async def a_trfrom(update, context, args):
-    await ask(update, context, "tr_from", "🔢 Send the message ID to start from (e.g. <code>1250</code>).")
+    await ask(update, context, "tr_from", head("🔢", "Start From ID", "SEND THE MESSAGE ID TO START FROM, E.G. <code>1250</code>."))
 
 
 @state("tr_from")
@@ -377,7 +348,7 @@ async def st_from(update, context):
     txt = (update.effective_message.text or "").strip()
     m = re.search(r"(\d+)\s*$", txt)
     if not m:
-        await update.effective_chat.send_message("⚠️ Send a number.", reply_markup=K.cancel())
+        await update.effective_chat.send_message("⚠️ SEND A NUMBER.", reply_markup=K.cancel())
         return
     await _go(update, context, int(m.group(1)))
 
@@ -392,13 +363,13 @@ async def a_trgo(update, context, args):
 async def _go(update, context, start_id: int):
     context.user_data.pop("state", None)
     if T.busy():
-        await show(update, "⚠️ A transfer is already running.", M([[B("📊 Open it", "adm:trjob")]]))
+        await show(update, "⚠️ A TRANSFER IS ALREADY RUNNING.", kb([[B("📊 Open", "adm:trjob")]]))
         return
     if T.clean_busy():
-        await show(update, "⚠️ A delete job is running.", M([[B("📊 Open it", "adm:trclj")]]))
+        await show(update, "⚠️ A DELETE JOB IS RUNNING.", kb([[B("📊 Open", "adm:trclj")]]))
         return
     if "tr_src" not in context.user_data or "tr_dst" not in context.user_data:
-        await show(update, "⚠️ Session expired, start again.", K.back("tr"))
+        await show(update, "⚠️ SESSION EXPIRED. START AGAIN.", K.back("tr"))
         return
     (sid, stitle), (did, dtitle) = context.user_data["tr_src"], context.user_data["tr_dst"]
     job = T.start_job(T.Job(src=sid, dst=did, src_title=stitle, dst_title=dtitle, start_id=max(1, start_id)))
@@ -410,7 +381,7 @@ async def _go(update, context, start_id: int):
 async def a_trjob(update, context, args):
     job = T.CURRENT
     if not job:
-        await show(update, "No transfer yet.", K.back("tr"))
+        await show(update, "📭 NO TRANSFER YET.", K.back("tr"))
         return
     await _watch(update, context, job, _status, _kb)
 
@@ -422,69 +393,62 @@ def _link(src: int, mid: int) -> str:
 
 def _status(job) -> str:
     if job.paused:
-        icon, label = "⏸", "paused"
+        icon, label = "⏸", "PAUSED"
     else:
         icon = {"done": "✅", "stopped": "⏹", "cancelled": "❌", "error": "⚠️"}.get(job.state, "🔄")
-        label = {"starting": "starting", "scanning": "reading source", "running": "copying", "done": "done",
-                 "stopped": "stopped (can be resumed)", "cancelled": "cancelled", "error": "error"}.get(job.state, job.state)
-    txt = (f"{icon} <b>{'Retry' if job.only_items is not None else 'Transfer'}</b> - {label}\n\n"
+        label = {"starting": "STARTING", "scanning": "READING SOURCE", "running": "COPYING", "done": "DONE",
+                 "stopped": "STOPPED (CAN RESUME)", "cancelled": "CANCELLED", "error": "ERROR"}.get(job.state, job.state.upper())
+    txt = (f"{icon} <b>{'RETRY' if job.only_items is not None else 'TRANSFER'}</b> ▸ {label}\n\n"
            f"📤 {_esc(job.src_title)}\n📥 {_esc(job.dst_title)}\n\n"
-           f"<code>{_bar(job.percent)}</code> {job.percent:.0f}%\n")
-
+           f"<code>{_bar(job.percent)}</code> <b>{job.percent:.0f}%</b>\n")
     if job.phase == "scan" and job.running:
-        txt += f"🔍 Counting what is in the source… <b>{job.total}</b> messages so far\n"
+        txt += f"🔍 COUNTING SOURCE ▸ <b>{job.total}</b> MESSAGES SO FAR\n"
     rows = []
     for k, ic, name in T.KINDS:
         seen = job.seen.get(k, 0)
         if not seen:
             continue
-        line = f"{ic} {name}: <b>{job.copied_by.get(k, 0)}</b> / {seen}"
+        line = f"{ic} {name.upper()} ▸ <b>{job.copied_by.get(k, 0)}</b> / {seen}"
         if job.failed_by.get(k):
-            line += f"   ⚠️ {job.failed_by[k]} not forwarded"
+            line += f" · ⚠️ {job.failed_by[k]} FAILED"
         rows.append(line)
     if rows:
-        txt += "\n<b>Source → transferred</b>\n" + "\n".join(rows) + "\n"
-
-    txt += (f"\n📦 In source: <b>{job.total}</b>\n"
-            f"✅ Transferred: <b>{job.copied}</b>\n"
-            f"🚫 Not forwarded: <b>{job.failed}</b>\n"
-            f"⏳ Left: <b>{job.left}</b>   ⏭ Skipped (deleted/service): {job.skipped}\n")
+        txt += "\n" + "\n".join(rows) + "\n"
+    txt += (f"\n📦 SOURCE ▸ <b>{job.total}</b> · ✅ COPIED ▸ <b>{job.copied}</b>\n"
+            f"🚫 FAILED ▸ <b>{job.failed}</b> · ⏳ LEFT ▸ <b>{job.left}</b> · ⏭ SKIPPED ▸ {job.skipped}\n")
     if job.fail_reasons:
-        why = ", ".join(f"{_esc(r)} ×{n}" for r, n in job.fail_reasons.most_common(3))
-        txt += f"❓ Why: {why}\n"
+        txt += "❓ WHY ▸ " + ", ".join(f"{_esc(r)} ×{n}" for r, n in job.fail_reasons.most_common(3)) + "\n"
     if job.running:
-        txt += f"⚡ {job.speed:.1f} msg/s   ⏱ left: {_t(job.eta)}   🎚 {T.SPEEDS[job.speed_key][0]}"
+        txt += f"⚡ <b>{job.speed:.1f}</b> MSG/S · ⏱ LEFT <b>{_t(job.eta)}</b> · 🎚 {T.SPEEDS[job.speed_key][0].upper()}"
         if job.flood_left and not job.paused:
-            txt += f"\n⏳ Telegram limit - waiting {job.flood_left}s"
+            txt += f"\n⏳ TELEGRAM LIMIT, WAITING {job.flood_left}S"
     else:
-        txt += f"⏱ Took {_t(job.elapsed())}"
+        txt += f"⏱ TOOK ▸ <b>{_t(job.elapsed())}</b>"
     if job.sent_n:
-        txt += f"\n🗑 {job.sent_n} copied messages are tracked and can be deleted in one tap."
+        txt += f"\n🗑 {job.sent_n} COPIED MESSAGES ARE TRACKED AND CAN BE DELETED IN ONE TAP."
     if job.error:
         txt += f"\n\n⚠️ {_esc(job.error)}"
     if job.state == "done":
-        txt += "\n\nAll done 🎉" if not job.failed else "\n\nDone - some messages could not be forwarded."
+        txt += "\n\n🎉 ALL DONE." if not job.failed else "\n\nDONE. SOME MESSAGES COULD NOT BE COPIED."
     if job.state == "stopped":
-        txt += "\n\nProgress is saved. Start a new transfer with the same chats to resume."
+        txt += "\n\nPROGRESS IS SAVED. START A NEW TRANSFER WITH THE SAME CHATS TO RESUME."
     return txt
 
 
 def _kb(job):
     if not job.running:
-        rows = []
+        items = []
         if job.failed_items:
-            rows.append([B(f"📋 Not forwarded ({job.failed})", "adm:trfail"), B("🔁 Retry failed", "adm:trretry")])
+            items += [(f"📋 Failed ({job.failed})", "adm:trfail"), ("🔁 Retry", "adm:trretry")]
         if job.sent_n:
-            rows.append([B(f"🗑 Delete the {job.sent_n} copied files", "adm:trdelj")])
-        rows.append([B("🔙 Back", "adm:tr")])
-        return M(rows)
-    main = [B("▶️ Resume", "adm:trresume") if job.paused else B("⏸ Pause", "adm:trpause"),
-            B("⏹ Stop", "adm:trstop")]
-    speed = [B(("✅ " if k == job.speed_key else "") + name, f"adm:trspd:{k}") for k, (name, _d) in T.SPEEDS.items()]
-    rows = [main, [B("❌ Cancel", "adm:trcancel")], speed]
+            items.append((f"🗑 Delete {job.sent_n} Copied", "adm:trdelj"))
+        return kb(grid(items), B("🔙 Back", "adm:tr"))
+    main = [("▶️ Resume", "adm:trresume") if job.paused else ("⏸ Pause", "adm:trpause"), ("⏹ Stop", "adm:trstop")]
+    speed = [(("✅ " if k == job.speed_key else "") + name, f"adm:trspd:{k}") for k, (name, _d) in T.SPEEDS.items()]
+    items = main + speed
     if job.failed_items:
-        rows.append([B(f"📋 Not forwarded ({job.failed})", "adm:trfail")])
-    return M(rows)
+        items.append((f"📋 Failed ({job.failed})", "adm:trfail"))
+    return kb(grid(items), B("❌ Cancel", "adm:trcancel"))
 
 
 async def _watch(update, context, obj, render, kbf):
@@ -504,11 +468,11 @@ async def _watch(update, context, obj, render, kbf):
         last = ""
         while True:
             await asyncio.sleep(3)
-            txt, kb = render(obj), kbf(obj)
-            sig = txt + "|" + ",".join(b.callback_data for r in kb.inline_keyboard for b in r)
+            txt, markup = render(obj), kbf(obj)
+            sig = txt + "|" + ",".join(b.callback_data for r in markup.inline_keyboard for b in r)
             if sig != last:
                 try:
-                    await msg.edit_text(txt, reply_markup=kb)
+                    await msg.edit_text(txt, reply_markup=markup)
                     last = sig
                 except Exception as e:
                     if "not modified" in str(e).lower():
@@ -566,10 +530,9 @@ async def a_trcancel(update, context, args):
         await _refresh(update)
         return
     await show(update,
-               "❌ <b>Cancel this transfer?</b>\n\n"
-               "The saved resume point is discarded.\n"
-               "Files that were already copied stay in the destination - you can delete them afterwards in one tap.",
-               M([[B("✅ Yes, cancel", "adm:trcancely")], [B("↩️ No, keep going", "adm:trjob")]]))
+               head("❌", "Cancel Transfer", "THE RESUME POINT IS DISCARDED.\n"
+                                            "FILES ALREADY COPIED STAY IN THE DESTINATION."),
+               K.confirm("adm:trcancely", "adm:trjob", "✅ Yes, Cancel", "↩️ Keep Going"))
 
 
 @action("trcancely")
@@ -595,7 +558,7 @@ async def a_trspd(update, context, args):
 async def a_trfail(update, context, args):
     job = T.CURRENT
     if not job or not job.failed:
-        await show(update, "✅ Nothing failed.", K.back("trjob"))
+        await show(update, "✅ NOTHING FAILED.", K.back("trjob"))
         return
     lines = []
     for mid, kind, why in job.failed_items[:25]:
@@ -605,23 +568,22 @@ async def a_trfail(update, context, args):
         lines.append(f"{ic} {ref} - {_esc(why)}")
     more = job.failed - min(len(job.failed_items), 25)
     why = ", ".join(f"{_esc(r)} ×{n}" for r, n in job.fail_reasons.most_common(5))
-    rows = [[B("🔁 Retry failed", "adm:trretry")]] if (job.failed_items and not job.running) else []
-    rows.append([B("🔙 Back", "adm:trjob")])
+    rows = [[B("🔁 Retry", "adm:trretry")]] if (job.failed_items and not job.running) else []
     await show(update,
-               f"🚫 <b>Not forwarded: {job.failed}</b>\n\n{why}\n\n" + "\n".join(lines)
-               + (f"\n… and {more} more" if more > 0 else ""),
-               M(rows))
+               head("🚫", "Failed", f"TOTAL ▸ <b>{job.failed}</b>\n{why}\n\n") + "\n".join(lines)
+               + (f"\n… AND {more} MORE" if more > 0 else ""),
+               kb(rows, B("🔙 Back", "adm:trjob")))
 
 
 @action("trretry")
 @owner_only
 async def a_trretry(update, context, args):
     if T.busy() or T.clean_busy():
-        await show(update, "⚠️ Another job is running.", M([[B("📊 Open it", "adm:trjob")]]))
+        await show(update, "⚠️ ANOTHER JOB IS RUNNING.", kb([[B("📊 Open", "adm:trjob")]]))
         return
     nj = T.retry_job(T.CURRENT) if T.CURRENT else None
     if not nj:
-        await show(update, "Nothing to retry.", K.back("tr"))
+        await show(update, "📭 NOTHING TO RETRY.", K.back("tr"))
         return
     await _watch(update, context, T.start_job(nj), _status, _kb)
 
@@ -629,32 +591,32 @@ async def a_trretry(update, context, args):
 # ===================================================================== one-shot delete
 def _cstatus(cj) -> str:
     icon = {"done": "✅", "stopped": "⏹", "error": "⚠️"}.get(cj.state, "🗑")
-    label = {"starting": "starting", "scanning": "finding messages", "running": "deleting",
-             "done": "done", "stopped": "stopped", "error": "error"}.get(cj.state, cj.state)
-    what = "everything in the chat" if cj.mode == "all" else "files copied by the transfer"
-    txt = (f"{icon} <b>Delete</b> - {label}\n\n📥 {_esc(cj.title)}\n<i>{what}</i>\n\n"
-           f"<code>{_bar(cj.percent)}</code> {cj.percent:.0f}%\n"
-           f"🗑 Deleted: <b>{cj.deleted}</b> / {cj.total}")
+    label = {"starting": "STARTING", "scanning": "FINDING MESSAGES", "running": "DELETING",
+             "done": "DONE", "stopped": "STOPPED", "error": "ERROR"}.get(cj.state, cj.state.upper())
+    what = "EVERYTHING IN THE CHAT" if cj.mode == "all" else "FILES COPIED BY THE TRANSFER"
+    txt = (f"{icon} <b>DELETE</b> ▸ {label}\n\n📥 {_esc(cj.title)}\n<i>{what}</i>\n\n"
+           f"<code>{_bar(cj.percent)}</code> <b>{cj.percent:.0f}%</b>\n"
+           f"🗑 DELETED ▸ <b>{cj.deleted}</b> / {cj.total}")
     if cj.missing:
-        txt += f"\n👻 Already gone: {cj.missing}"
+        txt += f"\n👻 ALREADY GONE ▸ {cj.missing}"
     if cj.failed:
-        txt += f"\n⚠️ Failed: {cj.failed}"
+        txt += f"\n⚠️ FAILED ▸ {cj.failed}"
     if cj.error:
         txt += f"\n\n⚠️ {_esc(cj.error)}"
     if cj.state == "done":
-        txt += "\n\nAll deleted 🎉"
+        txt += "\n\n🎉 ALL DELETED."
     return txt
 
 
 def _ckb(cj):
-    return M([[B("⏹ Stop", "adm:trclstop")]]) if cj.running else K.back("tr")
+    return kb([], B("⏹ Stop", "adm:trclstop")) if cj.running else K.back("tr")
 
 
 @action("trclj")
 @owner_only
 async def a_trclj(update, context, args):
     if not T.CLEAN:
-        await show(update, "No delete job yet.", K.back("tr"))
+        await show(update, "📭 NO DELETE JOB YET.", K.back("tr"))
         return
     await _watch(update, context, T.CLEAN, _cstatus, _ckb)
 
@@ -676,7 +638,7 @@ async def a_trclstop(update, context, args):
 @owner_only
 async def a_trcl(update, context, args):
     if T.busy():
-        await show(update, "⚠️ A transfer is running. Stop or cancel it first.", M([[B("📊 Open it", "adm:trjob")]]))
+        await show(update, "⚠️ A TRANSFER IS RUNNING. STOP OR CANCEL IT FIRST.", kb([[B("📊 Open", "adm:trjob")]]))
         return
     if T.clean_busy():
         await a_trclj(update, context, args)
@@ -686,17 +648,13 @@ async def a_trcl(update, context, args):
         return
     items = await T.tracked()
     context.user_data["tr_cl"] = items
-    rows = []
-    for i, d in enumerate(items):
-        rows.append([_B(f"🗑 {_short(d['dst_title'], 24)} · {d['n']} files", f"adm:trclsel:{i}")])
-    rows.append([B("🧹 Wipe a whole chat…", "adm:trwp")])
-    rows.append([B("🔙 Back", "adm:tr")])
+    rows = [[nm(f"🗑 {_short(d['dst_title'], 24)} · {d['n']} files", f"adm:trclsel:{i}")] for i, d in enumerate(items)]
+    rows.append([B("🧹 Wipe Chat", "adm:trwp")])
     await show(update,
-               "🗑 <b>Delete in one go</b>\n\n"
-               + ("Pick a destination to delete <b>everything this bot copied into it</b>:" if items
-                  else "Nothing copied by the bot is tracked yet.\n")
-               + "\n\n🧹 <b>Wipe a whole chat</b> removes ALL messages in a chat (e.g. Saved Messages).",
-               M(rows))
+               head("🗑", "Cleanup", ("TAP A DESTINATION TO DELETE <b>EVERYTHING THE BOT COPIED INTO IT</b>." if items
+                                      else "NOTHING COPIED BY THE BOT IS TRACKED YET.")
+                    + "\n🧹 <b>WIPE CHAT</b> DELETES ALL MESSAGES OF A CHAT."),
+               kb(rows, B("🔙 Back", "adm:tr")))
 
 
 def _tracked_item(context, args):
@@ -716,11 +674,10 @@ async def a_trclsel(update, context, args):
         return
     await show(update,
                f"🗑 <b>{_esc(d['dst_title'])}</b>\n\n"
-               f"The bot copied <b>{d['n']}</b> messages here (from {_esc(d['src_title'])}).\n"
-               "Delete exactly those - other messages in the chat are not touched.",
-               M([[B(f"✅ Delete the {d['n']} copied files", f"adm:trcly:{args[0]}")],
-                  [B("🧹 Wipe the WHOLE chat instead…", f"adm:trclw:{args[0]}")],
-                  [B("🔙 Back", "adm:trcl")]]))
+               f"COPIED BY THE BOT ▸ <b>{d['n']}</b> MESSAGES (FROM {_esc(d['src_title'])}).\n"
+               "ONLY THOSE ARE DELETED. OTHER MESSAGES STAY.",
+               kb(grid([(f"✅ Delete {d['n']}", f"adm:trcly:{args[0]}"), ("🧹 Wipe Chat", f"adm:trclw:{args[0]}")]),
+                  B("🔙 Back", "adm:trcl")))
 
 
 @action("trcly")
@@ -731,7 +688,7 @@ async def a_trcly(update, context, args):
         await a_trcl(update, context, [])
         return
     if T.busy() or T.clean_busy():
-        await show(update, "⚠️ Another job is running.", K.back("tr"))
+        await show(update, "⚠️ ANOTHER JOB IS RUNNING.", K.back("tr"))
         return
     cj = T.start_clean(T.CleanJob(dst=d["dst"], title=d["dst_title"], mode="tracked", src=d["src"]))
     await _watch(update, context, cj, _cstatus, _ckb)
@@ -748,7 +705,7 @@ async def a_trdelj(update, context, args):
         if job and d["src"] == job.src and d["dst"] == job.dst:
             await a_trclsel(update, context, [str(i)])
             return
-    await show(update, "Nothing tracked for this transfer.", K.back("tr"))
+    await show(update, "📭 NOTHING TRACKED FOR THIS TRANSFER.", K.back("tr"))
 
 
 # ---- wipe a whole chat
@@ -771,8 +728,7 @@ async def a_trwp(update, context, args):
     context.user_data["state"] = "tr_wipe_in"
     rows = [[B("💾 Saved Messages", "adm:trwps:me")]]
     await show(update,
-               "🧹 <b>Wipe a chat</b>\n\nTap the chat whose messages should ALL be deleted, "
-               "or send its link, @username or ID.",
+               head("🧹", "Wipe Chat", "TAP THE CHAT TO EMPTY, OR SEND ITS LINK, @USERNAME OR ID."),
                _page(items, page, "trwps", "trwp", rows))
 
 
@@ -794,7 +750,7 @@ async def st_wipe_in(update, context):
         chat = await T.resolve_chat(await T.session.ensure(), update.effective_message.text)
     except Exception as e:
         await update.effective_chat.send_message(
-            f"⚠️ Cannot open that chat (<code>{_esc(type(e).__name__)}</code>).", reply_markup=K.cancel())
+            f"⚠️ CANNOT OPEN THAT CHAT ▸ <code>{_esc(type(e).__name__)}</code>", reply_markup=K.cancel())
         return
     title = "Saved Messages" if chat.id == T.session.me.id else T.chat_title(chat)
     context.user_data["tr_wp"] = (chat.id, title)
@@ -810,13 +766,13 @@ async def _wipe_confirm(update, context):
     try:
         chat = await client.get_chat(cid)
         if T.kind_icon(chat) == "👤" and cid != T.session.me.id:
-            warn = "\n⚠️ This is a private chat - the messages are deleted for the other person too."
+            warn = "\n⚠️ PRIVATE CHAT ▸ MESSAGES ARE DELETED FOR THE OTHER PERSON TOO."
     except Exception:
         pass
     await show(update,
-               f"🧹 <b>Wipe: {_esc(title)}</b>\n\n"
-               f"ALL messages in this chat (about <b>{n}</b>) will be deleted. This cannot be undone.{warn}",
-               M([[B("🧹 Yes, delete everything", "adm:trwpy")], [B("❌ No, keep it", "adm:trcl")]]))
+               head("🧹", "Wipe Chat", f"<b>{_esc(title)}</b>\n\nALL MESSAGES (ABOUT <b>{n}</b>) WILL BE DELETED.\n"
+                                       f"THIS CANNOT BE UNDONE.{warn}"),
+               K.confirm("adm:trwpy", "adm:trcl", "🧹 Yes, Delete", "❌ No"))
 
 
 @action("trwpy")
@@ -827,7 +783,7 @@ async def a_trwpy(update, context, args):
         await a_trcl(update, context, [])
         return
     if T.busy() or T.clean_busy():
-        await show(update, "⚠️ Another job is running.", K.back("tr"))
+        await show(update, "⚠️ ANOTHER JOB IS RUNNING.", K.back("tr"))
         return
     cj = T.start_clean(T.CleanJob(dst=tgt[0], title=tgt[1], mode="all"))
     context.user_data.pop("tr_wp", None)

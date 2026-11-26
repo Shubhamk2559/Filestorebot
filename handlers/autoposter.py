@@ -23,12 +23,13 @@ from telegram import InlineKeyboardMarkup as M
 
 from database import db
 from database.db import settings as S
-from handlers.admin import B, PAGE, _ago, action, ask, ask_chat, resolve_channel, show, state
+from handlers.admin import PAGE, action, ask, ask_chat, resolve_channel, show, state
 from handlers.upload import media_info
 from utils import autoposter as AP
 from utils import batch as BT
 from utils import keyboards as K
-from utils.keyboards import ub as U
+from utils.keyboards import nm, pager, ub as U
+from utils.ui import ago
 from utils.links import share_link
 from utils.streamer import streamer
 
@@ -63,7 +64,7 @@ async def _job(coro, bot, chat_id):
 @action("ap")
 async def a_ap(update, context, args):
     chans = await db.ap_list_channels()
-    rows = [[B(f"📺 {c['title'][:30]}", f"adm:apc:{c['_id']}")] for c in chans]   # channel names keep their own font
+    rows = [[nm(f"📺 {c['title'][:30]}", f"adm:apc:{c['_id']}")] for c in chans]   # channel names keep their own font
     rows.append([U("➕ Add Channel", "adm:apadd")])
     rows.append([U("🔙 Back", "adm:home")])
     await show(update,
@@ -158,7 +159,7 @@ async def show_queue(update, cid: int, note: str = ""):
                    + f"✅ POSTED: <b>{posted}</b> · READY: <b>{len(ready)}</b> · WAITING: <b>{len(wait)}</b>\n"
                    f"⚙️ PREPARING: <b>{todo}</b> FOLDERS\n"
                    f"📆 GAP: <b>{gap}</b> D · <b>{min_h:g}</b> H\n"
-                   f"🕓 LAST POSTED: <b>{_ago(qs.get('last_posted_at')).upper()}</b>\n\n"
+                   f"🕓 LAST POSTED: <b>{ago(qs.get('last_posted_at'))}</b>\n\n"
                    "<b>WAITING</b>\n" + ("\n".join(lines) if lines else "<i>NONE</i>"),
                    M([[U("🔄 Refresh", f"adm:apq:{cid}")], [U("🔙 Back", f"adm:apc:{cid}")]]))
         return
@@ -172,7 +173,7 @@ async def show_queue(update, cid: int, note: str = ""):
                + f"⏳ PENDING: <b>{total - posted}</b> · ✅ POSTED: <b>{posted}</b>\n"
                f"🔁 CYCLE: <b>{qs.get('cycle', 0)}</b> · {'LOOP' if ch.get('loop', True) else 'ONE PASS'}\n"
                f"🕘 NEXT: <b>{when}</b>\n"
-               f"🕓 LAST POSTED: <b>{_ago(qs.get('last_posted_at')).upper()}</b>\n\n"
+               f"🕓 LAST POSTED: <b>{ago(qs.get('last_posted_at'))}</b>\n\n"
                "<b>UP NEXT</b>\n" + ("\n".join(lines) if lines else "<i>EMPTY</i>"),
                M([[U("🔀 Reshuffle", f"adm:apresh:{cid}"), U("🔄 Refresh", f"adm:apq:{cid}")],
                   [U("🔙 Back", f"adm:apc:{cid}")]]))
@@ -304,7 +305,7 @@ async def st_ap_btn(update, context):
 async def a_apthumb(update, context, args):
     cid = int(args[0])
     if not S.get("db_channel"):
-        await show(update, "⚠️ SET THE DATABASE CHANNEL FIRST.", M([[U("📡 Set Database Channel", "adm:dbch")]]))
+        await show(update, "⚠️ SET THE DATABASE CHANNEL FIRST.", M([[U("📡 DB Channel", "adm:dbch")], [U("🔙 Back", f"adm:apc:{cid}")]]))
         return
     ch = await db.ap_get_channel(cid) or {}
     context.user_data["ap_cid"] = cid
@@ -376,7 +377,7 @@ async def st_ap_pbtn(update, context):
 # ---------------------------------------------------------------------- imgbb keys
 async def show_keys(update, context, cid: int, note: str = ""):
     ks = BT.keys()
-    rows = [[B(f"🔑 {BT.mask(k)} · {BT.key_state(k)}", "adm:noop"), B("❌", f"adm:apimgrm:{cid}:{i}")]
+    rows = [[nm(f"🔑 {BT.mask(k)} · {BT.key_state(k)}", "adm:noop"), U("❌ Remove", f"adm:apimgrm:{cid}:{i}")]
             for i, k in enumerate(ks)]
     rows.append([U("➕ Add Key", f"adm:apimgadd:{cid}")])
     rows.append([U("🔙 Back", f"adm:apcb:{cid}")])
@@ -507,9 +508,8 @@ async def show_timings(update, cid: int, note: str = ""):
     rows = []
     for s in sorted(ch.get("slots", []), key=lambda s: s["t"]):
         k = s["t"].replace(":", "")       # ":" is the callback separator
-        rows.append([B(f"🕘 {s['t']}", "adm:noop"), B("➖", f"adm:apsn:{cid}:{k}:m"),
-                     B(str(s["n"]), "adm:noop"), B("➕", f"adm:apsn:{cid}:{k}:p"),
-                     B("❌", f"adm:apsd:{cid}:{k}")])
+        rows.append([U(f"🕘 {s['t']} · {s['n']} POST{'S' if s['n'] != 1 else ''}", "adm:noop"), U("❌ Remove", f"adm:apsd:{cid}:{k}")])
+        rows.append([U("➖ Less", f"adm:apsn:{cid}:{k}:m"), U("➕ More", f"adm:apsn:{cid}:{k}:p")])
     rows.append([U("➕ Add Time", f"adm:apsadd:{cid}")])
     rows.append([U("🔙 Back", f"adm:apc:{cid}")])
     await show(update,
@@ -582,16 +582,10 @@ async def a_apall(update, context, args):
     total, posted = await db.ap_counts(cid)
     posts = await db.ap_list_posts(cid, page * PAGE, PAGE)
     icon = {"pair": "💎", "batch": "👑"}
-    rows = [[B(f"{'✅' if p['posted'] else '⏳'} #{p['seq']} {p['title'][:24]} · {icon.get(p.get('ptype'), '🔥')}",
+    rows = [[nm(f"{'✅' if p['posted'] else '⏳'} #{p['seq']} {p['title'][:24]} · {icon.get(p.get('ptype'), '🔥')}",
                f"adm:app:{p['_id']}")]
             for p in posts]
-    nav = []
-    if page > 0:
-        nav.append(U("⬅️ Prev", f"adm:apall:{cid}:{page - 1}"))
-    if (page + 1) * PAGE < total:
-        nav.append(U("Next ➡️", f"adm:apall:{cid}:{page + 1}"))
-    if nav:
-        rows.append(nav)
+    rows.append(pager(page, -(-total // PAGE), f"adm:apall:{cid}"))
     rows.append([U("🔙 Back", f"adm:apc:{cid}")])
     await show(update,
                f"📚 <b>ALL POSTS ({total})</b>\n✅ {posted} · ⏳ {total - posted}\n\n"
@@ -677,7 +671,7 @@ async def a_apwipey(update, context, args):
 async def a_apnew(update, context, args):
     cid = int(args[0])
     if not S.get("db_channel"):
-        await show(update, "⚠️ SET THE DATABASE CHANNEL FIRST.", M([[U("📡 Set Database Channel", "adm:dbch")]]))
+        await show(update, "⚠️ SET THE DATABASE CHANNEL FIRST.", M([[U("📡 DB Channel", "adm:dbch")], [U("🔙 Back", f"adm:apc:{cid}")]]))
         return
     ch = await db.ap_get_channel(cid) or {}
     t = ch.get("ptype") or "classic"

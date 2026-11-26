@@ -8,7 +8,6 @@ import asyncio
 import html
 import logging
 
-from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden, TelegramError
 
@@ -16,7 +15,9 @@ from database import db
 from database.db import settings as S
 from utils import keyboards as K
 from utils.helpers import call, notify_owner
+from utils.keyboards import kb, ub
 from utils.links import share_link
+from utils.ui import esc, head
 
 log = logging.getLogger(__name__)
 MEDIA = ("document", "video", "audio", "photo", "animation", "voice", "video_note", "sticker")
@@ -54,7 +55,7 @@ def _caption_with_code(msg, code: str) -> str:
 async def _restore_status(context, msg):
     """One status message with a running count while the admin forwards old files back in."""
     n = context.user_data["restore_n"] = context.user_data.get("restore_n", 0) + 1
-    text = f"♻️ <b>Restore mode</b>\n\n{n} file(s) restored from their caption codes."
+    text = head("♻️", "Restore Mode", f"RESTORED FROM CAPTION CODES ▸ <b>{n}</b> FILES")
     st = context.user_data.get("restore_status")
     if st:
         try:
@@ -83,15 +84,15 @@ async def channel_restore(update, context):
     await db.restore_file(token, idx, msg.message_id, kind, name, _original_caption(msg), 0)
     log.info("Restored %s from caption code (new message id %s)", db.make_code(token, idx), msg.message_id)
     await notify_owner(context.bot, "restore",
-                       "♻️ Files are being restored from caption codes in the Database Channel. "
-                       "Old links will work again once all files are forwarded.", every=600)
+                       head("♻️", "Restoring Files", "FILES ARE BEING RESTORED FROM CAPTION CODES.\n"
+                                           "OLD LINKS WORK AGAIN ONCE ALL FILES ARE FORWARDED."), every=600)
 
 
 async def announce_link(context, chat_id: int, token: str, count: int, label: str):
     """Send the shareable link."""
     link = share_link(context.bot.username, token)
-    text = (f"✅ <b>Link created</b>\n📎 {html.escape(label)} "
-            f"({count} file{'s' if count != 1 else ''})\n\n🔗 <code>{link}</code>")
+    text = head("✅", "Link Created", f"📎 {esc(label)} ▸ <b>{count}</b> FILE{'S' if count != 1 else ''}\n\n"
+                                    f"🔗 <code>{link}</code>")
     await call(context.bot.send_message, chat_id, text, reply_markup=K.after_link(),
                parse_mode=ParseMode.HTML)
 
@@ -99,7 +100,7 @@ async def announce_link(context, chat_id: int, token: str, count: int, label: st
 async def _batch_status(context, msg):
     """Keep ONE status message updated with the running file count."""
     n = len(context.user_data.get("batch_ids", []))
-    text = f"📦 <b>Batch mode</b>\n\n{n} file(s) added.\nSend more files or tap <b>Done</b>."
+    text = head("📦", "Batch Mode", f"📁 FILES ▸ <b>{n}</b>\n\nSEND MORE, OR TAP <b>DONE</b>.")
     st = context.user_data.get("batch_status")
     if st:
         try:
@@ -135,14 +136,12 @@ async def _handle_upload(update, context):
     kind, name = media_info(msg)
     if not kind:
         if in_batch:
-            await msg.reply_text("📎 Send files only, or tap <b>Done</b>.", reply_markup=K.batch_kb())
+            await msg.reply_text("📎 SEND FILES ONLY, OR TAP <b>DONE</b>.", reply_markup=K.batch_kb())
         return
 
     channel = S.get("db_channel")
     if not channel:
-        await msg.reply_text(
-            "⚠️ Set the <b>Database Channel</b> first.",
-            reply_markup=M([[B("📡 Set Database Channel", callback_data="adm:dbch")]]))
+        await msg.reply_text("⚠️ SET THE DATABASE CHANNEL FIRST.", reply_markup=kb([[ub("📡 DB Channel", "adm:dbch")]]))
         return
 
     parsed = db.parse_code(msg.caption)
@@ -162,13 +161,12 @@ async def _handle_upload(update, context):
         kw = {"caption": caption, "parse_mode": ParseMode.HTML} if caption is not None else {}
         copied = await call(context.bot.copy_message, channel["id"], msg.chat_id, msg.message_id, **kw)
     except (Forbidden, BadRequest) as e:
-        await msg.reply_text(
-            f"⚠️ Unable to save to the Database Channel: <code>{html.escape(str(e))}</code>\n"
-            "Make sure the bot is still an admin there, or set the channel again.",
-            reply_markup=M([[B("📡 Database Channel", callback_data="adm:dbch")]]))
+        await msg.reply_text(f"⚠️ SAVE FAILED ▸ <code>{esc(e)}</code>\n"
+                             "CHECK THE BOT IS STILL ADMIN IN THE DATABASE CHANNEL, OR SET IT AGAIN.",
+                             reply_markup=kb([[ub("📡 DB Channel", "adm:dbch")]]))
         return
     except TelegramError as e:
-        await msg.reply_text(f"⚠️ Upload failed: <code>{html.escape(str(e))}</code>")
+        await msg.reply_text(f"⚠️ UPLOAD FAILED ▸ <code>{esc(e)}</code>")
         return
 
     if restoring:

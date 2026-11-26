@@ -1,6 +1,6 @@
 """
 handlers/broadcast.py
-Broadcast with live progress. Rate-limited (~25 msgs/sec, under Telegram's ~30/sec limit),
+Broadcast with live progress (edits one status message; `live` also feeds the web panel). Rate-limited (~25 msgs/sec, under Telegram's ~30/sec limit),
 honours RetryAfter, and flags users who blocked the bot so they are skipped next time.
 """
 import asyncio
@@ -10,15 +10,19 @@ import time
 from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 
 from database import db
+from utils import keyboards as K
 from utils.helpers import retry_seconds
+from utils.ui import bar, head
 
 log = logging.getLogger(__name__)
 BATCH = 25
 
 
-async def run_broadcast(bot, from_chat: int, msg_id: int, status_chat: int, status_msg: int):
+async def run_broadcast(bot, from_chat: int, msg_id: int, status_chat: int, status_msg: int, live: dict = None):
     total = await db.count_broadcastable()
     counts = {"sent": 0, "blocked": 0, "failed": 0}
+    if live is not None:
+        live["total"] = total
     done = 0
     last_edit = 0.0
 
@@ -52,18 +56,21 @@ async def run_broadcast(bot, from_chat: int, msg_id: int, status_chat: int, stat
 
     async def progress(final=False):
         nonlocal last_edit
+        if live is not None:
+            live.update(done=done, **counts)
         if not final and time.time() - last_edit < 3:
             return
         last_edit = time.time()
         pct = int(done * 100 / total) if total else 100
-        title = "✅ <b>Broadcast finished</b>" if final else "📢 <b>Broadcasting…</b>"
-        text = (f"{title}\n\n👥 Progress: {done}/{total} ({pct}%)\n"
-                f"✅ Sent: {counts['sent']}\n🚫 Blocked/unreachable: {counts['blocked']}\n"
-                f"⚠️ Failed: {counts['failed']}")
+        text = head("✅" if final else "📢", "Broadcast Done" if final else "Broadcasting",
+                    f"<code>{bar(pct)}</code> <b>{pct}%</b>\n\n"
+                    f"👥 DONE ▸ <b>{done}/{total}</b>\n"
+                    f"✅ SENT ▸ <b>{counts['sent']}</b>\n"
+                    f"🚫 BLOCKED ▸ <b>{counts['blocked']}</b>\n"
+                    f"⚠️ FAILED ▸ <b>{counts['failed']}</b>")
         try:
-            await bot.edit_message_text(text, chat_id=status_chat, message_id=status_msg)
-        except RetryAfter:
-            pass
+            await bot.edit_message_text(text, chat_id=status_chat, message_id=status_msg,
+                                        reply_markup=K.back() if final else None)
         except TelegramError:
             pass
 

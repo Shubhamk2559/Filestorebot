@@ -4,21 +4,20 @@ handlers/contact.py - "message the owner" feature.
 Any (non-admin) user can simply send a message to the bot: text, photo, video, file, voice ... anything.
 The bot forwards it to the OWNER with the sender's name / @username / ID and two buttons:
 
-    [↩️ Reply]  [🚫 Ban]
+    [↩️ REPLY]  [🚫 BAN]
 
 The owner answers in either way:
-  1. tap ↩️ Reply, then send the answer (text or media) -> it is delivered to the user
+  1. tap ↩️ REPLY, then send the answer (text or media) -> it is delivered to the user
   2. use Telegram's own "Reply" on the forwarded message (or on its header) -> delivered to the user
 
 Banned users are ignored. A small per-user rate limit protects the owner from spam.
 Owner message id -> user id is kept in MongoDB for 30 days (collection "contact_map").
 """
 import datetime as dt
-import html
 import logging
 import time
 
-from telegram import InlineKeyboardButton as _Btn, InlineKeyboardMarkup as M, ReplyParameters
+from telegram import ReplyParameters
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, TelegramError
 
@@ -27,6 +26,8 @@ from database import db
 from handlers.admin import state
 from utils import keyboards as K
 from utils.helpers import call, is_owner
+from utils.keyboards import grid, kb
+from utils.ui import esc, head
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +42,7 @@ _last_ack: dict = {}                     # uid -> timestamp
 
 
 def _kb(uid: int):
-    return M([[_Btn("↩️ Reply", callback_data=f"ct:r:{uid}"),
-               _Btn("🚫 Ban", callback_data=f"ct:b:{uid}")]])
+    return kb(grid([("↩️ Reply", f"ct:r:{uid}"), ("🚫 Ban", f"ct:b:{uid}")]))
 
 
 def _allowed(uid: int) -> bool:
@@ -77,11 +77,10 @@ async def relay(update, context):
     if not _allowed(user.id):
         return
 
-    name = html.escape(user.full_name or "User")
-    uname = f" (@{html.escape(user.username)})" if user.username else ""
-    header = (f"💬 <b>New message</b>\n"
-              f"👤 <a href=\"tg://user?id={user.id}\">{name}</a>{uname}\n"
-              f"🆔 <code>{user.id}</code>")
+    name = esc(user.full_name or "User")
+    uname = f" (@{esc(user.username)})" if user.username else ""
+    header = head("💬", "New Message", f"👤 <a href=\"tg://user?id={user.id}\">{name}</a>{uname}\n"
+                                       f"🆔 <code>{user.id}</code>")
     try:
         head = await call(context.bot.send_message, config.OWNER_ID, header,
                           reply_markup=_kb(user.id), parse_mode=ParseMode.HTML)
@@ -97,20 +96,20 @@ async def relay(update, context):
     now = time.time()
     if now - _last_ack.get(user.id, 0) >= ACK_EVERY:
         _last_ack[user.id] = now
-        await call(msg.reply_text, "✅ Your message has been sent to the owner. You will get the reply here.")
+        await call(msg.reply_text, "✅ <b>SENT TO THE OWNER</b>\n\nTHE REPLY ARRIVES HERE.")
 
 
 # ------------------------------------------------------------------ owner -> user
 async def _deliver(context, uid: int, msg) -> bool:
     """Send the owner's message `msg` to the user. Returns True on success."""
     try:
-        await call(context.bot.send_message, uid, "📩 <b>Reply from the owner</b>", parse_mode=ParseMode.HTML)
+        await call(context.bot.send_message, uid, "📩 <b>REPLY FROM THE OWNER</b>", parse_mode=ParseMode.HTML)
         await call(context.bot.copy_message, chat_id=uid, from_chat_id=msg.chat_id, message_id=msg.message_id)
         return True
     except Forbidden:
-        await msg.reply_text("⚠️ This user has blocked the bot - message not delivered.")
+        await msg.reply_text("⚠️ USER BLOCKED THE BOT. NOT DELIVERED.")
     except TelegramError as e:
-        await msg.reply_text(f"⚠️ Could not deliver: <code>{html.escape(str(e))}</code>")
+        await msg.reply_text(f"⚠️ NOT DELIVERED ▸ <code>{esc(e)}</code>")
     return False
 
 
@@ -121,7 +120,7 @@ async def try_native_reply(update, context) -> bool:
     if not doc:
         return False
     if await _deliver(context, doc["uid"], msg):
-        await msg.reply_text("✅ Reply sent.", reply_markup=_kb(doc["uid"]))
+        await msg.reply_text("✅ REPLY SENT.", reply_markup=_kb(doc["uid"]))
     return True
 
 
@@ -135,14 +134,14 @@ async def st_reply(update, context):
     if await _deliver(context, uid, msg):
         context.user_data.pop("state", None)
         context.user_data.pop("ct_uid", None)
-        await msg.reply_text("✅ Reply sent.", reply_markup=_kb(uid))
+        await msg.reply_text("✅ REPLY SENT.", reply_markup=_kb(uid))
 
 
 async def callback(update, context):
     """Inline buttons under forwarded messages: ct:r:<uid> (reply) / ct:b:<uid> (ban)."""
     q = update.callback_query
     if not is_owner(q.from_user.id):
-        await q.answer("⛔ Not allowed", show_alert=True)
+        await q.answer("⛔ NOT ALLOWED", show_alert=True)
         return
     try:
         _, act, uid = q.data.split(":")
@@ -155,8 +154,8 @@ async def callback(update, context):
         context.user_data["state"] = "ct_reply"
         context.user_data["ct_uid"] = uid
         await q.answer()
-        await q.message.reply_text(f"↩️ Send your reply for <code>{uid}</code> (text or any media).",
+        await q.message.reply_text(head("↩️", "Reply", f"SEND YOUR REPLY FOR <code>{uid}</code> (TEXT OR MEDIA)."),
                                    reply_markup=K.cancel(), parse_mode=ParseMode.HTML)
     elif act == "b":
         await db.set_banned(uid, True)
-        await q.answer("🚫 User banned", show_alert=True)
+        await q.answer("🚫 USER BANNED", show_alert=True)

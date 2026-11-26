@@ -17,13 +17,12 @@ import datetime as dt
 import html
 import logging
 
-from telegram import InlineKeyboardMarkup as M
-
 from database import db
 from handlers.admin import action, show
 from utils import ads
 from utils.helpers import owner_only
-from utils.keyboards import ub
+from utils.keyboards import grid, kb, ub
+from utils.ui import table as _table
 
 log = logging.getLogger(__name__)
 TZ_NAME = "Asia/Kolkata"
@@ -46,13 +45,6 @@ def _m(x) -> str:
     if x < 1000:
         return f"${x:,.2f}"
     return f"${x / 1000:.1f}k"
-
-
-def _table(rows, widths) -> str:
-    out = []
-    for r in rows:
-        out.append(r[0].ljust(widths[0]) + "".join(str(c).rjust(w) for c, w in zip(r[1:], widths[1:])))
-    return "<pre>" + html.escape("\n".join(out)) + "</pre>"
 
 
 # ------------------------------------------------------------------ data
@@ -99,12 +91,10 @@ def _range(n: int):
 
 # ------------------------------------------------------------------ screens
 def _kb(active: str = ""):
-    return M([
-        [ub("📅 Daily", "adm:an:d"), ub("🗓 Monthly", "adm:an:m")],
-        [ub("🏆 Top Links", "adm:an:t"), ub("📊 Traffic", "adm:an:x")],
-        [ub("🔄 Refresh", f"adm:an:{active}" if active else "adm:an"), ub("📺 Ads", "adm:ads")],
-        [ub("🔙 Back", "adm:monet")],
-    ])
+    return kb(grid([("📅 Daily", "adm:an:d"), ("🗓 Monthly", "adm:an:m"),
+                    ("🏆 Top Links", "adm:an:t"), ("📊 Traffic", "adm:an:x"),
+                    ("🔄 Refresh", f"adm:an:{active}" if active else "adm:an"), ("📺 Ads", "adm:ads")]),
+              ub("🔙 Back", "adm:monet"))
 
 
 @action("an")
