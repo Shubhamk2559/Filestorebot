@@ -10,7 +10,6 @@ import re
 import time
 from functools import wraps
 
-from telegram import ReplyKeyboardRemove
 from telegram.error import RetryAfter, TelegramError
 
 import config
@@ -102,16 +101,6 @@ def render_caption(template: str, user) -> str:
 
 
 # ------------------------------------------------------------ parsing admin input
-CANCEL_TEXT = "❌ Cancel"
-async def clear_picker(msg):
-    """Remove the picker keyboard (a message can only carry one markup, so send + delete a tiny one)."""
-    try:
-        m = await msg.reply_text("✅", reply_markup=ReplyKeyboardRemove())
-        await m.delete()
-    except TelegramError:
-        pass
-
-
 def extract_chat_ref(msg):
     """Channel from the picker, a forwarded message, a numeric ID, @username or t.me/username link."""
     shared = getattr(msg, "chat_shared", None)
