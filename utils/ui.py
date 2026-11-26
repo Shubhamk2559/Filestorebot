@@ -2,7 +2,12 @@
 
 Every screen:   <emoji> <b>BOLD CAPS TITLE</b>               (normal font, as before)
                 (blank line)
-                <blockquote>𝗠𝗜𝗡𝗜𝗠𝗔𝗟 𝗖𝗔𝗣𝗦 𝗗𝗘𝗦𝗖𝗥𝗜𝗣𝗧𝗜𝗢𝗡.</blockquote>   (quote + small bold font)
+                𝗠𝗜𝗡𝗜𝗠𝗔𝗟 𝗖𝗔𝗣𝗦 𝗗𝗘𝗦𝗖𝗥𝗜𝗣𝗧𝗜𝗢𝗡.                       (small bold font, NOT quoted)
+                <blockquote>THE ONE LINE THE USER MUST NOTICE.</blockquote>   (quote = attention)
+
+Only text that needs attention is quoted: wrap it in hl("...") - warnings, "cannot be undone", "save before it
+vanishes", daily limit reached ... A paragraph that starts with a warning sign (⚠️ ❗ 🚨 ⛔) is quoted automatically.
+Instructions, hints, menu captions and status lines stay plain.
 
 Names that belong to the owner (channels, captions, link and post titles) are never upper-cased.
 """
@@ -63,41 +68,59 @@ def _balanced(t: str) -> bool:
     return all(len(re.findall(rf"<{x}[ >]", t)) == t.count(f"</{x}>") for x in ("b", "i", "u", "s", "code", "a"))
 
 
-def quote(body: str) -> str:
-    """Body text -> restyled <blockquote> paragraphs. <pre> tables stay outside the quote (monospace)."""
-    out = []
-    for seg in re.split(r"(<pre>.*?</pre>)", body, flags=re.S):
-        if seg.startswith("<pre>"):
-            out.append(seg)
+_BQ = re.compile(r"(<blockquote>.*?</blockquote>)", re.S)
+_ALERT = ("⚠️", "❗", "🚨", "⛔")      # a paragraph starting with one of these is quoted automatically
+
+
+def hl(text: str) -> str:
+    """Mark text as IMPORTANT: it is shown inside a quote. Use it for the single message the user must not miss."""
+    return f"<blockquote>{text.strip(chr(10))}</blockquote>"
+
+
+def body(text: str) -> str:
+    """Body text -> small bold font. Plain paragraphs stay unquoted; only hl() parts and ⚠️ paragraphs are quoted.
+    <pre> tables stay as they are (monospace). Safe to run twice on the same text."""
+    items = []                                           # (quoted?, text)
+    for part in _BQ.split(text):
+        if part.startswith("<blockquote>"):
+            items.append((True, small(part[len("<blockquote>"):-len("</blockquote>")].strip("\n"))))
             continue
-        paras, cur = [], ""
-        for para in re.split(r"\n{2,}", seg.strip("\n")):
-            cur = f"{cur}\n\n{para}" if cur else para
-            if _balanced(cur):
-                paras.append(cur)
-                cur = ""
-        if cur:
-            paras.append(cur)
-        out += [f"<blockquote>{small(p.strip(chr(10)))}</blockquote>" for p in paras if p.strip()]
-    return "\n".join(out)
+        for seg in re.split(r"(<pre>.*?</pre>)", part, flags=re.S):
+            if seg.startswith("<pre>"):
+                items.append((False, seg))
+                continue
+            cur = ""
+            for para in re.split(r"\n{2,}", seg.strip("\n")):
+                cur = f"{cur}\n\n{para}" if cur else para
+                if not _balanced(cur):
+                    continue
+                p, cur = cur.strip("\n"), ""
+                if p.strip():
+                    items.append((p.lstrip().startswith(_ALERT), small(p)))
+            if cur.strip():
+                items.append((False, small(cur.strip("\n"))))
+    out = ""
+    for k, (quoted, t) in enumerate(items):
+        t = f"<blockquote>{t}</blockquote>" if quoted else t
+        if k:
+            out += "\n" if (quoted or items[k - 1][0]) else "\n\n"
+        out += t
+    return out
+
+
+quote = body        # old name
 
 
 _TITLE = re.compile(r"^[^\s<]+ <b>.*?</b>")
 
 
 def styled(text: str) -> str:
-    """Whole screen text: keep '<emoji> <b>TITLE</b>' as is, put everything below it into the quote + font.
-    Text that came from head() is already quoted - only what follows its last quote gets styled."""
-    end = text.rfind("</blockquote>")
-    if end != -1:
-        end += len("</blockquote>")
-        tail = text[end:].strip("\n")
-        return text[:end] + ("\n" + quote(tail) if tail else "")
+    """Whole screen text: keep '<emoji> <b>TITLE</b>' as is, put the rest in the small font (quote only what is important)."""
     lines = text.split("\n")
     for i, ln in enumerate(lines):
         if _TITLE.match(ln):
-            body = "\n".join(lines[i + 1:]).strip("\n")
-            return "\n".join(lines[:i + 1]) + ("\n\n" + quote(body) if body else "")
+            rest = "\n".join(lines[i + 1:]).strip("\n")
+            return "\n".join(lines[:i + 1]) + ("\n\n" + body(rest) if rest else "")
     return text
 
 
@@ -108,7 +131,7 @@ def esc(s) -> str:
 def head(icon: str, title: str, desc: str = "", of: str = "") -> str:
     """Screen heading. `of` is a raw name (channel, link ...) shown after the title in its own case."""
     t = f"{icon} <b>{title.upper()}</b>" + (f" — {esc(of)}" if of else "")
-    desc = quote(desc.strip("\n")) if desc and desc.strip() else ""
+    desc = body(desc.strip("\n")) if desc and desc.strip() else ""
     return f"{t}\n\n{desc}" if desc else t
 
 

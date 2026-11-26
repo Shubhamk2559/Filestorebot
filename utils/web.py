@@ -18,7 +18,7 @@ from utils import home
 
 log = logging.getLogger(__name__)
 LINK_TTL = 30  # seconds: cache link lookups so the redirect doesn't hit Mongo every time
-_link_cache: dict = {}
+_link_cache = db.LINK_CACHE   # shared with database.db: purge_link() clears it, so a deleted link dies instantly
 
 
 async def _valid_link(token: str):

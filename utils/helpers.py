@@ -144,3 +144,23 @@ def extract_post_id(msg, channel_id: int):
         if m:
             return int(m.group(1))
     return None
+
+
+async def drop_channel_msgs(bot, ids) -> int:
+    """Delete these messages from the Database Channel (best effort, 100 per call). Returns how many were asked for."""
+    ids = sorted({int(i) for i in ids or [] if i})
+    channel = S.get("db_channel")
+    if not ids or not channel:
+        return 0
+    for i in range(0, len(ids), 100):
+        try:
+            await bot.delete_messages(channel["id"], ids[i:i + 100])
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)
+            try:
+                await bot.delete_messages(channel["id"], ids[i:i + 100])
+            except TelegramError as e2:
+                log.warning("Could not delete channel messages: %s", e2)
+        except TelegramError as e:
+            log.warning("Could not delete channel messages: %s", e)
+    return len(ids)
