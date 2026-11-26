@@ -49,7 +49,7 @@ usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<links open
 ap_channels_col = db["ap_channels"]   # Autoposter targets: _id=chat id, slots, enabled, done
 ap_posts_col = db["ap_posts"]         # Autoposter posts: _id=share-link token, chan=chat id, seq, posted
 ap_batches_col = db["ap_batches"]     # Vault Pack jobs (post type 3): resumable imgbb / Telegraph / file-store work - utils/batch.py
-vps_col = db["vps_usage"]             # _id="YYYY-MM-DD-HH" (IST): hourly VPS samples (cpu, ram, network, streams) - utils/usage.py
+vps_col = db["vps_usage"]             # _id="YYYY-MM-DD-HH" (IST): hourly VPS samples (cpu, ram, network) - utils/usage.py
 stats_col = db["daily_stats"]         # _id="YYYY-MM-DD" (IST): views, gates, imp, clk, valued, rev, verified, fallback, blocked
 
 # A user can open at most this many links per day (admins are exempt). One link = 1 count, all its files are sent.
@@ -76,8 +76,7 @@ DEFAULTS = {
     "start_caption": DEFAULT_CAPTION,
     "custom_buttons": [],         # rows of [[text, url], ...]
     "autodelete": 0,              # minutes, 0 = off
-    "delivery_mode": "forward",   # "forward" = send the files in chat, "stream" = Stream/Download web links
-    "protect": False,             # protect_content on delivered files (forward mode only)
+    "protect": False,             # protect_content on forwarded files
     "custom_caption": "",         # HTML, replaces original caption when set
     "remove_caption": False,      # strip original caption
     "daily_limit": 10,            # links per user per day (admins exempt)
@@ -152,7 +151,24 @@ async def init_db():
     await ap_posts_col.create_index([("chan", 1), ("posted", 1), ("seq", 1)])
     await ap_posts_col.create_index("batch_id")
     await ap_batches_col.create_index([("status", 1), ("next_try", 1)])
+    await _tag_post_links()
     await settings.load()
+
+
+async def _tag_post_links():
+    """One-time (idempotent) upgrade: give the ad-gated link of every EXISTING Autoposter post its "chan",
+    so the channel's Ads / Limit setting reaches old posts too. Errors are swallowed: never block start-up."""
+    try:
+        by_chan = {}
+        async for p in ap_posts_col.find({}, {"chan": 1, "ptype": 1, "vtoken": 1}):
+            gated = p.get("vtoken") if p.get("ptype") in ("pair", "batch") else p["_id"]
+            if gated:
+                by_chan.setdefault(p["chan"], set()).add(gated)
+        for cid, tokens in by_chan.items():
+            await links_col.update_many({"_id": {"$in": list(tokens)}, "chan": {"$exists": False}},
+                                        {"$set": {"chan": cid}})
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------- users
@@ -301,13 +317,17 @@ async def restore_file(token: str, idx: int, new_msg_id: int, kind: str, name: s
     await links_col.update_one({"_id": token}, {"$set": {f"ids.{idx}": new_msg_id}})
 
 
-async def create_link(ids: list, creator: int, label: str, token: str = None, no_ads: bool = False) -> str:
-    """no_ads=True: a free preview link - opened without the ad gate and without using the daily limit."""
+async def create_link(ids: list, creator: int, label: str, token: str = None, no_ads: bool = False,
+                      chan: int = None) -> str:
+    """no_ads=True: a free preview link - opened without the ad gate and without using the daily limit.
+    chan = Autoposter channel id: the link then follows that channel's live Ads / Limit setting."""
     token = token or new_token()
     doc = {"_id": token, "ids": ids, "creator": creator, "label": label,
            "created": time.time(), "views": 0}
     if no_ads:
         doc["no_ads"] = True
+    if chan is not None and not no_ads:
+        doc["chan"] = chan
     await links_col.insert_one(doc)
     return token
 
@@ -385,35 +405,72 @@ def limit_value() -> int:
         return DAILY_LIMIT
 
 
-async def claim_quota(user_id: int):
-    """Atomically take ONE link from today's allowance (no in-process locks, safe even with several workers).
-    Returns (granted 0/1, used_after)."""
+OPT_MAX = 10
+
+
+def _opt(value, default: int = 1) -> int:
+    """Clamp an Ads / Limit setting to 0..OPT_MAX (anything odd -> default)."""
+    try:
+        return min(OPT_MAX, max(0, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def chan_opts(ch) -> tuple:
+    """(ads_n, cost) of an Autoposter channel document. Defaults: 1 ad, 1 count."""
+    ch = ch or {}
+    return _opt(ch.get("ads_n", 1)), _opt(ch.get("cost", 1))
+
+
+async def link_opts(link: dict) -> tuple:
+    """(ads_n, cost) for a link, read LIVE from its Autoposter channel (link["chan"]), so a channel setting
+    change applies at once to every old and new post of that channel. Links without "chan"
+    (normal admin uploads) or whose channel is gone: 1 ad, 1 count."""
+    cid = (link or {}).get("chan")
+    if cid is None:
+        return 1, 1
+    return chan_opts(await ap_channels_col.find_one({"_id": cid}, {"ads_n": 1, "cost": 1}))
+
+
+async def link_cost(link: dict) -> int:
+    """How many of the user's daily-limit counts opening this link uses (0 = free)."""
+    return (await link_opts(link))[1]
+
+
+async def link_ads(link: dict) -> int:
+    """How many ads must be watched before the files arrive (0 = no ad)."""
+    return (await link_opts(link))[0]
+
+
+async def claim_quota(user_id: int, n: int = 1):
+    """Atomically take n counts from today's allowance (no in-process locks, safe even with several workers).
+    Returns (granted n or 0, used_after)."""
     limit = limit_value()
-    if limit <= 0:
+    if limit <= 0 or n > limit:
         return 0, 0
     key = f"{user_id}:{_today()}"
     expire = _next_midnight() + dt.timedelta(days=1)
     for _ in range(3):
         doc = await usage_col.find_one_and_update(
-            {"_id": key, "used": {"$lt": limit}},
-            {"$inc": {"used": 1}, "$set": {"expire_at": expire}},
+            {"_id": key, "used": {"$lte": limit - n}},
+            {"$inc": {"used": n}, "$set": {"expire_at": expire}},
             projection={"used": 1}, return_document=ReturnDocument.AFTER)
         if doc:
-            return 1, int(doc["used"])
+            return n, int(doc["used"])
         try:
-            await usage_col.insert_one({"_id": key, "used": 1, "expire_at": expire})
-            return 1, 1
+            await usage_col.insert_one({"_id": key, "used": n, "expire_at": expire})
+            return n, n
         except DuplicateKeyError:
             cur = await usage_col.find_one({"_id": key}, {"used": 1})
-            if cur and int(cur.get("used", 0)) >= limit:
+            if cur and int(cur.get("used", 0)) > limit - n:
                 return 0, int(cur["used"])
             # else: we raced with the very first insert of the day -> try the update again
     return 0, limit
 
 
 async def reserve_quota(user_id: int, wanted: int = 1) -> int:
-    """Kept for compatibility: 1 link = 1 count."""
-    granted, _ = await claim_quota(user_id)
+    """Kept for compatibility."""
+    granted, _ = await claim_quota(user_id, wanted)
     return granted
 
 
