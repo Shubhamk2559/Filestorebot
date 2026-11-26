@@ -96,3 +96,10 @@ Autoposter → channel → 🎭 Post Type (cycles 🔥 Solo Drop → 💎 Duo Re
 * Posting: max 1 post per time slot; same folder min 30 days (+0-8 random) apart; any two posts min 3 h apart (🎨 Caption & Button → 📆 Spacing).
 * Caption tags (Vault Pack channels only, otherwise they stay as typed): `{Preview Image}`, `{Video Link}`, `{Post Number}`. The number is taken at posting time (last + 1, no repeat, no gap).
 * 🎨 Caption & Button → imgbb API Keys / Telegraph Title (`{folder_name}`) / Post Number.
+
+## 5. Panel design
+One style everywhere (`utils/ui.py` text, `utils/keyboards.py` buttons): bold CAPS heading, minimal CAPS description,
+`LABEL ▸ VALUE` lines, CAPS buttons in two columns, BACK / CLOSE / CANCEL full width. Channel names, captions and
+post / link titles keep their own case. Settings values are shown only inside their own screen, never in the parent menu.
+
+Offline UI test (no Telegram / MongoDB needed): `python3 tests/test_ui.py`

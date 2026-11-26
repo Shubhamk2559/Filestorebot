@@ -20,10 +20,10 @@ import config
 from database import db
 from handlers import admin, start, upload
 from handlers import autoposter as _autoposter  # noqa: F401  (registers the Autoposter panel screens)
-from handlers import backup as _backup          # registers the Backup / Restore screens
-from handlers import analytics as _analytics    # registers the Earnings / Analytics screens
-from handlers import transfer as _transfer      # registers the Transfer screens (user-account channel copy)
-from handlers import usage as _usage            # registers the VPS Usage / Plan advice screens
+from handlers import backup as _backup          # noqa: F401  registers the Backup / Restore screens
+from handlers import analytics as _analytics    # noqa: F401  registers the Earnings / Analytics screens
+from handlers import transfer as _transfer      # noqa: F401  registers the Transfer screens (user-account channel copy)
+from handlers import usage as _usage            # noqa: F401  registers the VPS Usage / Plan advice screens
 from handlers import contact                    # users can message the owner through the bot
 from utils.backup import backup_loop
 from utils import padding
