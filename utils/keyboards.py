@@ -83,6 +83,7 @@ def settings_panel(owner: bool = False):
         ("🖼 Start Image", "adm:simg"), ("📝 Start Caption", "adm:scap"),
         ("🔘 Join Buttons", "adm:btns"), ("⏱ Auto-Delete", "adm:autodel"),
         ("🛡 Protect", "adm:protect"),
+        ("📊 Daily Limit", "adm:dlimit"),
         ("🏷 File Caption", "adm:fcap"),
     ]
     if owner:
