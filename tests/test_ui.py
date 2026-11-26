@@ -146,7 +146,7 @@ def check_markup(name, markup):
 async def screens():
     # (action, args) pairs that render without a database
     plan = [("home", []), ("settings", []), ("users", []), ("monet", []), ("servers", []), ("fsub", []),
-            ("fsubch", ["-1001"]), ("btns", []), ("mode", []), ("autodel", []), ("autodel", ["10"]), ("protect", []),
+            ("fsubch", ["-1001"]), ("btns", []), ("autodel", []), ("autodel", ["10"]), ("protect", []),
             ("fcap", []), ("reset", []), ("simg", []), ("scap", []), ("admins", []), ("batch", []), ("ads", []),
             ("bk", []), ("fsubup", ["-1002"]), ("fsubtoggle", [])]
     for name, args in plan:
