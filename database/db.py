@@ -46,7 +46,7 @@ ads_col = db["ad_sessions"]      # one-time Mini App ad sessions (auto-expire)
 usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<links opened today>
 ap_channels_col = db["ap_channels"]   # Autoposter targets: _id=chat id, slots, enabled, done
 ap_posts_col = db["ap_posts"]         # Autoposter posts: _id=share-link token, chan=chat id, seq, posted
-ap_batches_col = db["ap_batches"]     # Folder Batch jobs (post type 3): resumable imgbb / Telegraph / file-store work - utils/batch.py
+ap_batches_col = db["ap_batches"]     # Vault Pack jobs (post type 3): resumable imgbb / Telegraph / file-store work - utils/batch.py
 vps_col = db["vps_usage"]             # _id="YYYY-MM-DD-HH" (IST): hourly VPS samples (cpu, ram, network, streams) - utils/usage.py
 stats_col = db["daily_stats"]         # _id="YYYY-MM-DD" (IST): views, gates, imp, clk, valued, rev, verified, fallback, blocked
 
@@ -471,7 +471,7 @@ async def ap_last_seq(cid: int) -> int:
 async def ap_add_post(cid: int, token: str, thumb_token, seq: int, title: str, cap: str,
                       kind: str, n_files: int, by: int, **extra):
     """token = the share-link token of the files; thumb_token = backup code token of the thumbnail copy in the DB channel.
-    Image + Video posts (ptype="pair"): token = the free IMAGE link, extra vtoken = the ad-gated VIDEO link,
+    Duo Reel posts (ptype="pair"): token = the free IMAGE link, extra vtoken = the ad-gated VIDEO link,
     thumb_token = None (the post shows the channel's fixed thumbnail, or the image itself)."""
     await ap_posts_col.insert_one({
         "_id": token, "chan": cid, "seq": seq, "thumb_token": thumb_token, "title": title,
@@ -481,7 +481,7 @@ async def ap_add_post(cid: int, token: str, thumb_token, seq: int, title: str, c
 
 
 def post_tokens(post: dict) -> list:
-    """Every share-link token that belongs to an Autoposter post (1 for classic, 2 for Image + Video)."""
+    """Every share-link token that belongs to an Autoposter post (1 for classic, 2 for Duo Reel)."""
     return [post["_id"]] + ([post["vtoken"]] if post.get("vtoken") else [])
 
 
