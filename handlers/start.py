@@ -21,7 +21,7 @@ from utils.helpers import call, is_admin, notify_owner, render_caption, retry_se
 from utils import ads
 from utils import support as SUP
 from utils.keyboards import grid, kb, link as url_btn, ub
-from utils.ui import esc, head
+from utils.ui import esc, head, hl
 from utils.membership import get_missing
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ async def start_cmd(update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()  # drop any half-finished admin prompt
 
     if banned and not is_admin(user.id):
-        await msg.reply_text(head("🚫", "Banned", "YOU CANNOT USE THIS BOT."))
+        await msg.reply_text(head("🚫", "Banned", hl("YOU CANNOT USE THIS BOT.")))
         return
 
     token = context.args[0] if context.args else ""
@@ -163,7 +163,7 @@ def _caption_override():
 
 async def _limit_reached(bot, chat_id: int):
     await call(bot.send_message, chat_id,
-               head("🚫", "Daily Limit Reached", f"ONLY <b>{db.limit_value()}</b> LINKS PER DAY.\nCOME BACK TOMORROW (RESETS 12:00 AM IST)."),
+               head("🚫", "Daily Limit Reached", f"ONLY <b>{db.limit_value()}</b> LINKS PER DAY.\n" + hl("COME BACK TOMORROW (RESETS 12:00 AM IST).")),
                parse_mode=ParseMode.HTML, reply_markup=SUP.markup())
 
 
@@ -273,7 +273,7 @@ async def deliver_forward(bot, chat_id: int, link: dict, channel: dict) -> int:
         try:
             notice = await call(
                 bot.send_message, chat_id,
-                head("⏳", "Auto-Delete", f"FILES VANISH IN <b>{minutes} MIN</b>. SAVE THEM BEFORE THEN."), parse_mode=ParseMode.HTML)
+                head("⏳", "Auto-Delete", hl(f"FILES VANISH IN <b>{minutes} MIN</b>. SAVE THEM BEFORE THEN.")), parse_mode=ParseMode.HTML)
             sent.append(notice.message_id)
         except TelegramError:
             pass
@@ -294,4 +294,4 @@ async def _config_problem(bot, channel, err):
     await notify_owner(
         bot, "dbch",
         head("⚠️", "Database Channel Error", f"<b>{esc(channel.get('title'))}</b>\n<code>{esc(err)}</code>\n\n"
-             "MAKE SURE THE BOT IS ADMIN THERE, OR SET THE CHANNEL AGAIN."))
+             + hl("MAKE SURE THE BOT IS ADMIN THERE, OR SET THE CHANNEL AGAIN.")))

@@ -35,10 +35,11 @@ from utils.helpers import (
     extract_chat_ref,
     extract_user_id,
     extract_post_id,
+    drop_channel_msgs,
 )
 from utils.keyboards import grid, kb, nm, pager, ub
 from utils.links import share_link
-from utils.ui import ago, esc, head, mb, note, onoff, styled
+from utils.ui import ago, esc, head, hl, mb, note, onoff, styled
 
 log = logging.getLogger(__name__)
 
@@ -781,8 +782,8 @@ async def st_unban(update, context):
 @action("reset")
 async def a_reset(update, context, args):
     await show(update,
-               head("♻️", "Reset Settings", "ALL SETTINGS RETURN TO DEFAULT.\n"
-                                            "ADMINS AND DATABASE CHANNEL ARE KEPT.\n\n<b>CONTINUE?</b>"),
+               head("♻️", "Reset Settings", "ADMINS AND DATABASE CHANNEL ARE KEPT.\n\n"
+                                            + hl("ALL OTHER SETTINGS RETURN TO DEFAULT. <b>CONTINUE?</b>")),
                K.confirm("adm:resetyes", "adm:settings", "✅ Yes, Reset"))
 
 
@@ -994,7 +995,7 @@ async def a_links(update, context, args):
             for r in await db.list_links(page * PAGE, PAGE, creator)]
     rows.append(pager(page, -(-total // PAGE), "adm:links"))
     await show(update,
-               head("🔗", "My Links", f"TOTAL ▸ <b>{total}</b>\n\nTAP A LINK TO VIEW OR REVOKE IT." if total
+               head("🔗", "My Links", f"TOTAL ▸ <b>{total}</b>\n\nTAP A LINK TO VIEW OR DELETE IT." if total
                     else "NO LINKS YET. SEND A FILE TO CREATE ONE."),
                kb(rows, ub("🔙 Back", "adm:home")))
 
@@ -1003,16 +1004,18 @@ async def a_links(update, context, args):
 async def a_lk(update, context, args):
     link = await db.get_link(args[0])
     if not link:
-        await show(update, "⚠️ LINK NOT FOUND. IT MAY BE REVOKED.", K.back("links"))
+        await show(update, "⚠️ LINK NOT FOUND. IT MAY BE DELETED.", K.back("links"))
         return
     await show(update,
                f"🔗 <b>{esc(link['label'])}</b>\n\n"
                f"📁 FILES ▸ <b>{len(link['ids'])}</b> · 👁 VIEWS ▸ <b>{link['views']}</b>\n\n"
                f"<code>{share_link(context.bot.username, link['_id'])}</code>",
-               kb([[ub("🗑 Revoke", f"adm:lkdel:{link['_id']}")]], ub("🔙 Back", "adm:links")))
+               kb([[ub("🗑 Delete Link", f"adm:lkdel:{link['_id']}")]], ub("🔙 Back", "adm:links")))
 
 
 @action("lkdel")
 async def a_lkdel(update, context, args):
-    await db.delete_link(args[0])
-    await show(update, "🗑 LINK REVOKED. IT NO LONGER WORKS.", K.back("links"))
+    ids = await db.purge_link(args[0])               # link + files + posts + progress, all gone from MongoDB
+    await drop_channel_msgs(context.bot, ids)        # and its copies in the Database Channel
+    await show(update, "🗑 <b>LINK DELETED</b>\n\n" + hl("REMOVED FROM THE DATABASE FOR GOOD. IT CANNOT BE RESTORED."),
+               K.back("links"))

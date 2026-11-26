@@ -22,7 +22,7 @@ from utils import backup as BK
 from utils import keyboards as K
 from utils.helpers import owner_only
 from utils.keyboards import grid, kb, ub
-from utils.ui import ago, esc, head, onoff
+from utils.ui import ago, esc, head, hl, onoff
 
 log = logging.getLogger(__name__)
 TG_DOWNLOAD_LIMIT = 20 * 1024 * 1024
@@ -73,7 +73,7 @@ async def a_bknow(update, context, args):
         return
     await show(update,
                head("✅", "Backup Sent", f"👥 <b>{counts['users']}</b> USERS · 🔗 <b>{counts['links']}</b> LINKS · "
-                                         f"📁 <b>{counts['files']}</b> FILES\n\nKEEP THE FILE SAFE."),
+                                         f"📁 <b>{counts['files']}</b> FILES\n\n" + hl("KEEP THE FILE SAFE.")),
                K.back("bk"))
 
 
@@ -128,8 +128,8 @@ async def ingest(update, context):
              f"📅 {esc(head_.get('created_str', '?'))} · @{esc(head_.get('bot') or '?')}\n"
              f"👥 <b>{len(d['users'])}</b> USERS · 🔗 <b>{len(d['links'])}</b> LINKS · 📁 <b>{len(d['files'])}</b> FILES\n"
              f"📅 AUTOPOSTER ▸ <b>{len(d['ap_channels'])}</b> CHANNELS · <b>{len(d['ap_posts'])}</b> POSTS\n\n"
-             "<b>REPLACE</b> ▸ DATABASE BECOMES THIS BACKUP.\n"
-             "<b>MERGE</b> ▸ ADDS ONLY WHAT IS MISSING."),
+             "<b>MERGE</b> ▸ ADDS ONLY WHAT IS MISSING.\n\n"
+             + hl("<b>REPLACE</b> ▸ DATABASE BECOMES THIS BACKUP. CURRENT DATA IS OVERWRITTEN.")),
         reply_markup=kb(grid([("♻️ Replace", "adm:bkgo:full"), ("➕ Merge", "adm:bkgo:merge")]),
                         ub("❌ Cancel", "adm:bkx")))
 

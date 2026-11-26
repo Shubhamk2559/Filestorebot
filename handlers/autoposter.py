@@ -29,7 +29,8 @@ from utils import autoposter as AP
 from utils import batch as BT
 from utils import keyboards as K
 from utils.keyboards import nm, pager, ub as U
-from utils.ui import ago, styled
+from utils.ui import ago, hl, styled
+from utils.helpers import drop_channel_msgs
 from utils.links import share_link
 from utils.mtproto import mtproto
 
@@ -419,7 +420,7 @@ async def a_apimg(update, context, args):
 async def a_apimgadd(update, context, args):
     context.user_data["ap_cid"] = int(args[0])
     await ask(update, context, "ap_imgkey",
-              "🌐 <b>ADD IMGBB KEY</b>\n\nSEND THE KEY. YOUR MESSAGE IS DELETED AFTER SAVING.")
+              "🌐 <b>ADD IMGBB KEY</b>\n\nSEND THE KEY. " + hl("YOUR MESSAGE IS DELETED AFTER SAVING."))
 
 
 @action("apimgrm")
@@ -663,12 +664,11 @@ async def a_appnow(update, context, args):
 async def a_apdel(update, context, args):
     p = await db.ap_get_post(args[0])
     with_link = len(args) > 1 and args[1] == "1"
-    await db.ap_delete_post(args[0])
-    if with_link:
-        for t in (db.post_tokens(p) if p else [args[0]]):
-            await db.delete_link(t)
+    ids = await db.purge_post(args[0], with_link)          # with_link: the post's links are erased from MongoDB too
+    await drop_channel_msgs(context.bot, ids)              # thumbnail / file copies in the Database Channel
     await show(update,
-               "🗑 POST AND LINK DELETED." if with_link else "🗑 POST DELETED. ITS LINK STILL WORKS.",
+               "🗑 <b>POST AND LINK DELETED</b>\n\n" + hl("REMOVED FROM THE DATABASE FOR GOOD.") if with_link
+               else "🗑 POST DELETED. ITS LINK STILL WORKS.",
                K.back(f"apall:{p['chan']}:0" if p else "ap"))
 
 
@@ -678,7 +678,7 @@ async def a_apwipe(update, context, args):
     total, posted = await db.ap_counts(cid)
     await show(update,
                f"🧹 <b>WIPE POSTS</b>\n\n📚 {total} · ✅ {posted} · ⏳ {total - posted}\n\n"
-               "POSTS ONLY: OLD LINKS KEEP WORKING.\nPOSTS + LINKS: LINKS ARE DELETED TOO.",
+               "POSTS ONLY: OLD LINKS KEEP WORKING.\n" + hl("POSTS + LINKS: LINKS ARE ERASED FROM THE DATABASE TOO."),
                M([[U("🧹 Wipe All", f"adm:apwipey:{cid}:a0"), U("🧹 Wipe All + Links", f"adm:apwipey:{cid}:a1")],
                   [U("✅ Wipe Posted Only", f"adm:apwipey:{cid}:p0")],
                   [U("🔙 Back", f"adm:apc:{cid}")]]))
@@ -687,7 +687,8 @@ async def a_apwipe(update, context, args):
 @action("apwipey")
 async def a_apwipey(update, context, args):
     cid, mode = int(args[0]), args[1]
-    n = await db.ap_wipe(cid, only_posted=mode[0] == "p", links=mode[1] == "1")
+    n, ids = await db.ap_wipe(cid, only_posted=mode[0] == "p", links=mode[1] == "1")
+    await drop_channel_msgs(context.bot, ids)
     await show_channel(update, cid, f"🧹 {n} POST(S) DELETED.\n\n")
 
 

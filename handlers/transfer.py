@@ -19,7 +19,7 @@ from utils import keyboards as K
 from utils import transfer as T
 from utils.helpers import owner_only
 from utils.keyboards import grid, kb, nm, pager, ub
-from utils.ui import bar as _bar, esc as _esc, head
+from utils.ui import bar as _bar, esc as _esc, head, hl
 
 log = logging.getLogger(__name__)
 B = ub          # CAPS panel button; chat titles use nm()
@@ -156,7 +156,7 @@ async def st_pw(update, context):
 @owner_only
 async def a_trsess(update, context, args):
     await ask(update, context, "tr_sess",
-              head("🔑", "Session", "PASTE A <b>PYROGRAM SESSION STRING</b>.\n<i>THE MESSAGE IS DELETED RIGHT AFTER.</i>"))
+              head("🔑", "Session", "PASTE A <b>PYROGRAM SESSION STRING</b>.\n" + hl("THE MESSAGE IS DELETED RIGHT AFTER.")))
 
 
 @state("tr_sess")
@@ -177,7 +177,7 @@ async def st_sess(update, context):
 @action("trout")
 @owner_only
 async def a_trout(update, context, args):
-    await show(update, head("🚪", "Logout", "REMOVE THIS ACCOUNT FROM THE BOT?\n<i>THE SAVED SESSION IS DELETED.</i>"),
+    await show(update, head("🚪", "Logout", "REMOVE THIS ACCOUNT FROM THE BOT?\n" + hl("THE SAVED SESSION IS DELETED.")),
                K.confirm("adm:trouty", "adm:tr", "✅ Yes, Logout", "❌ No"))
 
 
@@ -530,8 +530,7 @@ async def a_trcancel(update, context, args):
         await _refresh(update)
         return
     await show(update,
-               head("❌", "Cancel Transfer", "THE RESUME POINT IS DISCARDED.\n"
-                                            "FILES ALREADY COPIED STAY IN THE DESTINATION."),
+               head("❌", "Cancel Transfer", "FILES ALREADY COPIED STAY IN THE DESTINATION.\n" + hl("THE RESUME POINT IS DISCARDED.")),
                K.confirm("adm:trcancely", "adm:trjob", "✅ Yes, Cancel", "↩️ Keep Going"))
 
 
@@ -771,7 +770,7 @@ async def _wipe_confirm(update, context):
         pass
     await show(update,
                head("🧹", "Wipe Chat", f"<b>{_esc(title)}</b>\n\nALL MESSAGES (ABOUT <b>{n}</b>) WILL BE DELETED.\n"
-                                       f"THIS CANNOT BE UNDONE.{warn}"),
+                                       + hl(f"THIS CANNOT BE UNDONE.{warn}")),
                K.confirm("adm:trwpy", "adm:trcl", "🧹 Yes, Delete", "❌ No"))
 
 

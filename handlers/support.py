@@ -41,7 +41,7 @@ from utils import support as SUP
 from utils.helpers import call, is_admin, is_owner, notify_owner
 from utils.keyboards import grid, kb, nm, ub
 from utils.links import share_link
-from utils.ui import ago, esc, head, note, onoff
+from utils.ui import ago, esc, head, hl, note, onoff
 
 log = logging.getLogger(__name__)
 
@@ -364,7 +364,7 @@ async def on_start(update, context):
         return
     doc = await _touch(user)
     if doc.get("banned"):
-        await msg.reply_text(head("🚫", "Banned", "YOU CANNOT USE SUPPORT."))
+        await msg.reply_text(head("🚫", "Banned", hl("YOU CANNOT USE SUPPORT.")))
         return
     src = context.args[0][2:] if context.args and context.args[0].startswith("l_") else ""
     about = ""
