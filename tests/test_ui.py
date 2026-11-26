@@ -190,7 +190,12 @@ def static_menus():
     check(K.ub("a b", "x").text == "A B", "ub() must upper-case")
     check(K.grid([("a", "1"), ("b", "2"), ("c", "3")])[1][0].text == "C", "grid leftover")
     check(K.pager(0, 1, "p") == [] and len(K.pager(1, 3, "p")) == 2, "pager")
-    check(ui.head("⚙️", "Admin Control Panel", "X") == "⚙️ <b>ADMIN CONTROL PANEL</b>\n\n<blockquote>𝗫</blockquote>", "head()")
+    check(ui.head("⚙️", "Admin Control Panel", "X") == "⚙️ <b>ADMIN CONTROL PANEL</b>\n\n𝗫", "head() must NOT quote plain text")
+    check(ui.head("⚙️", "T", ui.hl("KEEP IT SAFE.")) == "⚙️ <b>T</b>\n\n<blockquote>𝗞𝗘𝗘𝗣 𝗜𝗧 𝗦𝗔𝗙𝗘.</blockquote>", "hl() quotes")
+    two = ui.head("⚙️", "T", "FIRST LINE.\n\n" + ui.hl("DANGER.") + "\n\nLAST LINE.")
+    check(two.count("<blockquote>") == 1 and "𝗙𝗜𝗥𝗦𝗧" in two and "𝗟𝗔𝗦𝗧" in two, "only the hl() part is quoted")
+    check("<blockquote>" in ui.head("⚙️", "T", "⚠️ BAD INPUT."), "a ⚠️ paragraph is quoted automatically")
+    check(ui.styled(two) == two, "styled() is idempotent")
     check(ui.ago(None) == "NEVER" and ui.ago(__import__("time").time() - 7200) == "2 H AGO", "ago()")
     check(ui.bar(50, 10) == "█████░░░░░", "bar()")
 
