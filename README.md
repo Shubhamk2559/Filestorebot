@@ -85,14 +85,14 @@ Put your own reverse proxy (nginx/Caddy, `proxy_buffering off`) in front of port
 - Plan prices are approximate: check https://contabo.com/en/pricing/ and edit `DEFAULT_PLANS` in `utils/usage.py`, or set `CONTABO_PLANS_JSON` in `.env`.
 - Files sent inside Telegram chats use Telegram's servers, not your VPS. Only Stream/Download links, ads page and uploads use VPS bandwidth.
 
-## Post type 3 - 📂 Folder Batch
+## Post type 3 - 👑 Vault Pack
 
-Autoposter → channel → 🔄 Post Type (cycles Classic → Image + Video → Folder Batch).
+Autoposter → channel → 🎭 Post Type (cycles 🔥 Solo Drop → 💎 Duo Reel → 👑 Vault Pack).
 
 * Create Post → range (first + last message link). A text containing "Uploaded" (e.g. `Wedding Uploaded ✅`) closes a folder; every file above it is one folder.
 * Photos → imgbb (random 5-15 s cooldown, several keys in rotation) → ONE Telegraph article. Other files → ONE file-store link.
 * Every captioned photo = its own post (same Telegraph + video link). No captioned photo → one post with the first photo.
 * Work is saved after every step (collection `ap_batches`), so restarts / empty imgbb keys just pause and resume.
 * Posting: max 1 post per time slot; same folder min 30 days (+0-8 random) apart; any two posts min 3 h apart (🎨 Caption & Button → 📆 Spacing).
-* Caption tags (Folder Batch channels only, otherwise they stay as typed): `{Preview Image}`, `{Video Link}`, `{Post Number}`. The number is taken at posting time (last + 1, no repeat, no gap).
+* Caption tags (Vault Pack channels only, otherwise they stay as typed): `{Preview Image}`, `{Video Link}`, `{Post Number}`. The number is taken at posting time (last + 1, no repeat, no gap).
 * 🎨 Caption & Button → imgbb API Keys / Telegraph Title (`{folder_name}`) / Post Number.
