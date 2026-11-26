@@ -217,8 +217,12 @@ async def message_router(update, context):
     user, msg = update.effective_user, update.effective_message
     if not user or not msg:
         return
-    if not is_admin(user.id):          # a normal user writes to the bot -> forwarded to the owner
-        from handlers import contact
+    if not is_admin(user.id):
+        from utils import support as SUP
+        if SUP.available():            # Support Bot connected -> send the user there (one topic per user, no mixing)
+            await SUP.hint(update)
+            return
+        from handlers import contact   # no Support Bot yet -> old behaviour: forwarded to the owner
         await contact.relay(update, context)
         return
 
@@ -249,7 +253,7 @@ async def a_home(update, context, args):
 
 @action("settings")
 async def a_settings(update, context, args):
-    await show(update, head("⚙️", "Settings", "SELECT AN OPTION TO CONFIGURE THE BOT."), K.settings_panel())
+    await show(update, head("⚙️", "Settings", "SELECT AN OPTION TO CONFIGURE THE BOT."), K.settings_panel(is_owner(update.effective_user.id)))
 
 
 @action("users")

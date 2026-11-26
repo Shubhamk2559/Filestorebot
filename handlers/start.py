@@ -19,6 +19,7 @@ from database.db import settings as S
 from handlers import admin
 from utils.helpers import call, is_admin, notify_owner, render_caption, retry_seconds
 from utils import ads
+from utils import support as SUP
 from utils.keyboards import grid, kb, link as url_btn, ub
 from utils.ui import esc, head
 from utils.membership import get_missing
@@ -58,7 +59,8 @@ async def handle_token(context, user, chat_id: int, token: str):
     else:                  # link lookup and channel-membership check run in parallel (faster first response)
         link, missing = await asyncio.gather(db.get_link(token), get_missing(context.bot, user.id))
     if not link:
-        await call(context.bot.send_message, chat_id, head("❌", "Invalid Link", "THIS LINK IS WRONG OR REVOKED."))
+        await call(context.bot.send_message, chat_id, head("❌", "Invalid Link", "THIS LINK IS WRONG OR REVOKED."),
+                   reply_markup=SUP.markup())
         return
     if missing:
         await send_gate(context, user, chat_id, token, missing)
@@ -75,6 +77,7 @@ async def send_gate(context, user, chat_id: int, token: str = "", missing=None):
     rows = grid([url_btn(f"📢 {ch['title'][:28]}", ch["link"], raw=True) for ch in channels])
     rows += [[url_btn(t, u, raw=True) for t, u in custom_row] for custom_row in S.get("custom_buttons")]
     rows.append([ub("✅ Verify" if token else "🔄 Verify", f"chk:{token}")])
+    rows += SUP.row(token)
 
     caption = render_caption(S.get("start_caption"), user)
     markup = kb(rows)
@@ -113,11 +116,13 @@ async def check_callback(update, context):
         pass
     if not token:
         await call(context.bot.send_message, q.message.chat_id,
-                   head("✅", "Verified", f"OPEN A FILE LINK TO GET YOUR FILES.\n\n📊 LIMIT ▸ <b>{db.limit_value()}</b> LINKS PER DAY"))
+                   head("✅", "Verified", f"OPEN A FILE LINK TO GET YOUR FILES.\n\n📊 LIMIT ▸ <b>{db.limit_value()}</b> LINKS PER DAY"),
+                   reply_markup=SUP.markup())
         return
     link = await link_task
     if not link:
-        await call(context.bot.send_message, q.message.chat_id, head("❌", "Invalid Link", "THIS LINK IS WRONG OR REVOKED."))
+        await call(context.bot.send_message, q.message.chat_id, head("❌", "Invalid Link", "THIS LINK IS WRONG OR REVOKED."),
+                   reply_markup=SUP.markup())
         return
     await request_access(context.bot, q.message.chat_id, link)
 
@@ -160,7 +165,8 @@ def _caption_override():
 
 async def _limit_reached(bot, chat_id: int):
     await call(bot.send_message, chat_id,
-               head("🚫", "Daily Limit Reached", f"ONLY <b>{db.limit_value()}</b> LINKS PER DAY.\nCOME BACK TOMORROW (RESETS 12:00 AM IST)."), parse_mode=ParseMode.HTML)
+               head("🚫", "Daily Limit Reached", f"ONLY <b>{db.limit_value()}</b> LINKS PER DAY.\nCOME BACK TOMORROW (RESETS 12:00 AM IST)."),
+               parse_mode=ParseMode.HTML, reply_markup=SUP.markup())
 
 
 async def request_access(bot, chat_id: int, link: dict):
@@ -209,7 +215,9 @@ async def deliver(bot, chat_id: int, link: dict):
     text = f"📊 LIMIT ▸ <b>{used}/{limit}</b> USED · <b>{max(0, limit - used)}</b> LEFT"
     if used >= limit:
         text += "\n🚫 LIMIT REACHED. RESETS 12:00 AM IST."
-    await call(bot.send_message, chat_id, text, parse_mode=ParseMode.HTML)
+    if SUP.available():
+        text += "\n🛟 VIDEO NOT PLAYING OR ANY PROBLEM? TAP BELOW."
+    await call(bot.send_message, chat_id, text, parse_mode=ParseMode.HTML, reply_markup=SUP.markup(link["_id"]))
 
 
 async def _deliver(bot, chat_id: int, link: dict) -> int:
@@ -217,7 +225,8 @@ async def _deliver(bot, chat_id: int, link: dict) -> int:
     Returns how many files the user actually received."""
     channel = S.get("db_channel")
     if not channel:
-        await call(bot.send_message, chat_id, head("⚠️", "Not Ready", "THE BOT IS NOT SET UP YET. TRY AGAIN LATER."))
+        await call(bot.send_message, chat_id, head("⚠️", "Not Ready", "THE BOT IS NOT SET UP YET. TRY AGAIN LATER."),
+                   reply_markup=SUP.markup())
         return 0
     if S.get("delivery_mode") == "stream" and not link.get("no_ads"):     # a free preview image is always sent as the photo
         if streamer.ready:
@@ -337,7 +346,7 @@ async def deliver_stream(bot, chat_id: int, link: dict, channel: dict):
 
 async def _unavailable(bot, chat_id):
     try:
-        await bot.send_message(chat_id, head("⚠️", "Files Unavailable", "TRY AGAIN LATER."))
+        await bot.send_message(chat_id, head("⚠️", "Files Unavailable", "TRY AGAIN LATER."), reply_markup=SUP.markup())
     except TelegramError:
         pass
 
