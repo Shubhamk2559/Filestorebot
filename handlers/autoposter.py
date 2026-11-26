@@ -31,7 +31,7 @@ from utils import keyboards as K
 from utils.keyboards import nm, pager, ub as U
 from utils.ui import ago
 from utils.links import share_link
-from utils.streamer import streamer
+from utils.mtproto import mtproto
 
 log = logging.getLogger(__name__)
 MAX_RANGE = 10000
@@ -99,9 +99,17 @@ async def show_channel(update, cid: int, note: str = ""):
         await _gone(update)
         return
     on = ch.get("enabled", True)
+    ads_n, cost = db.chan_opts(ch)
     await show(update,
-               f"{note}📺 <b>{html.escape(ch['title'])}</b>\n\nSELECT AN OPTION TO MANAGE THIS CHANNEL.",
+               f"{note}📺 <b>{html.escape(ch['title'])}</b>\n\n"
+               f"📺 ADS BEFORE FILE ▸ <b>{ads_n}</b>{' (NO AD)' if ads_n == 0 else ''}\n"
+               f"👤 USER LIMIT USED ▸ <b>{cost}</b>{' (FREE)' if cost == 0 else ''} / {db.limit_value()} PER DAY\n"
+               "APPLIES LIVE TO ALL POSTS OF THIS CHANNEL.\n\nSELECT AN OPTION TO MANAGE THIS CHANNEL.",
                M([
+                   [U("➖", f"adm:apchopt:{cid}:ads:-1"), U(f"📺 Ads: {ads_n}", f"adm:apchopt:{cid}:ads:0"),
+                    U("➕", f"adm:apchopt:{cid}:ads:1")],
+                   [U("➖", f"adm:apchopt:{cid}:cost:-1"), U(f"👤 Limit: {cost}", f"adm:apchopt:{cid}:cost:0"),
+                    U("➕", f"adm:apchopt:{cid}:cost:1")],
                    [U("⏰ Timings", f"adm:aptm:{cid}"), U("📚 All Posts", f"adm:apall:{cid}:0")],
                    [U("➕ Create Post", f"adm:apnew:{cid}"), U("🎨 Caption", f"adm:apcb:{cid}")],
                    [U("🎭 Post Type", f"adm:aptype:{cid}")],
@@ -115,6 +123,21 @@ async def show_channel(update, cid: int, note: str = ""):
 @action("apc")
 async def a_apc(update, context, args):
     await show_channel(update, int(args[0]))
+
+
+@action("apchopt")
+async def a_apchopt(update, context, args):
+    """apchopt:<cid>:<ads|cost>:<-1|0|1> - channel-wise Ads / Limit (0..10, applies live to every post; 0 = just refresh)."""
+    cid, field, step = int(args[0]), args[1], int(args[2])
+    ch = await db.ap_get_channel(cid)
+    if not ch or field not in ("ads", "cost"):
+        await _gone(update)
+        return
+    if step:
+        key = "ads_n" if field == "ads" else "cost"
+        cur = db.chan_opts(ch)[0 if field == "ads" else 1]
+        await db.ap_set(cid, **{key: db._opt(cur + step)})
+    await show_channel(update, cid)
 
 
 @action("apon")
@@ -610,10 +633,12 @@ async def show_post(update, bot, token: str, note: str = ""):
                     if not p["posted"] and float(p.get("not_before") or 0) > time.time() else ""))
     else:
         links = f"🔗 <code>{share_link(bot.username, token)}</code>"
+    ads_n, cost = db.chan_opts(await db.ap_get_channel(p["chan"]))
+    opts = f"\n\n📺 Ads: {ads_n} · 👤 Limit: {cost} (channel setting)"
     await show(update,
                f"{note}📝 <b>#{p['seq']}</b> · {'✅ POSTED' if p['posted'] else '⏳ PENDING'} · "
                f"{TYPES.get(p.get('ptype') or 'classic', TYPES['classic'])}\n"
-               f"📁 FILES: {p['n_files']}\n\n{html.escape(p['title'])}\n\n{links}",
+               f"📁 FILES: {p['n_files']}\n\n{html.escape(p['title'])}\n\n{links}{opts}",
                M([[U("📤 Post Now", f"adm:appnow:{token}")],
                   [U("🗑 Delete", f"adm:apdel:{token}:0"), U("🗑 Delete + Link", f"adm:apdel:{token}:1")],
                   [U("🔙 Back", f"adm:apall:{p['chan']}:0")]]))
@@ -710,10 +735,10 @@ def parse_post_ref(msg):
 @action("aprange")
 async def a_aprange(update, context, args):
     cid = int(args[0])
-    if not streamer.ready:
+    if not mtproto.ready:
         await show(update,
-                   "⚠️ RANGE NEEDS THE MTPROTO ENGINE (API_ID, API_HASH, BASE_URL).\n"
-                   f"STATUS: <code>{html.escape(streamer.error or 'not running')}</code>\n\n"
+                   "⚠️ RANGE NEEDS THE MTPROTO SESSION (API_ID, API_HASH).\n"
+                   f"STATUS: <code>{html.escape(mtproto.error or 'not running')}</code>\n\n"
                    "USE <b>SEND FILES</b> INSTEAD.",
                    K.back(f"apnew:{cid}"))
         return
@@ -763,7 +788,7 @@ async def st_ap_last(update, context):
 
 async def _read_range(bot, status, src, first: int, last: int, convert) -> list:
     """Read messages first..last of the source channel (200 at a time) and keep what `convert` accepts."""
-    client = streamer.client
+    client = mtproto.client
     ids = list(range(first, last + 1))
     out = []
     for i in range(0, len(ids), 200):

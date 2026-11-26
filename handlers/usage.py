@@ -104,7 +104,7 @@ async def _summary(update):
                 "</pre>"
                 f"⚡ <b>{now['ram_used_mb'] / 1024:.1f}</b>/{now['ram_total_mb'] / 1024:.1f} GB RAM · "
                 f"<b>{now['disk_used_gb']:.1f}</b>/{now['disk_total_gb']:.0f} GB DISK\n"
-                f"🌐 <b>{now['mbps']:.1f}</b> MBPS · 👥 <b>{now['streams']}</b> STREAMING · "
+                f"🌐 <b>{now['mbps']:.1f}</b> MBPS · "
                 f"🤖 BOT <b>{now['bot_rss_mb']:.0f}</b> MB\n\n")
     tot = U.total(docs)
     days = len({d["_id"][:10] for d in docs})
@@ -128,9 +128,7 @@ async def _daily(update):
     for d in days:
         a = agg.get(d.isoformat())
         rows.append(_row(d.strftime("%d %b"), a) if a else [d.strftime("%d %b"), "-", "-", "-", "-"])
-    peak_streams = max((a["streams"] for a in agg.values()), default=0)
-    await show(update, "📅 <b>LAST 7 DAYS</b>\n\n" + _table(rows, WIDTHS) + LEGEND +
-               f"\n👥 PEAK STREAMING ▸ <b>{peak_streams}</b>", _kb("d"))
+    await show(update, "📅 <b>LAST 7 DAYS</b>\n\n" + _table(rows, WIDTHS) + LEGEND, _kb("d"))
 
 
 async def _weekly(update):
@@ -207,7 +205,7 @@ async def _advice(update):
         f"📦 TRAFFIC ▸ <b>{r['out_tb_month']:.2f}</b> TB / MONTH\n",
     ]
     if r["undersized"]:
-        lines.append(f"⚠️ EVEN <b>{pick['name']}</b> IS TIGHT. SPLIT THE LOAD (E.G. A 2ND SERVER FOR STREAMING).")
+        lines.append(f"⚠️ EVEN <b>{pick['name']}</b> IS TIGHT. SPLIT THE LOAD ACROSS 2 SERVERS.")
     else:
         lines.append(f"✅ <b>BEST FIT ▸ {pick['name']}</b>")
         lines.append(f"{pick['cores']} vCPU · {pick['ram_gb']} GB · {pick['disk_gb']} GB · {pick['port']} Mbit/s")

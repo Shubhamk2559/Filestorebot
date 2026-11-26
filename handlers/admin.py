@@ -38,7 +38,6 @@ from utils.helpers import (
 )
 from utils.keyboards import grid, kb, nm, pager, ub
 from utils.links import share_link
-from utils.streamer import streamer
 from utils.ui import ago, esc, head, mb, note, onoff
 
 log = logging.getLogger(__name__)
@@ -567,31 +566,6 @@ async def st_btns(update, context):
 async def a_btnclr(update, context, args):
     await S.set("custom_buttons", [])
     await show(update, "🗑 CUSTOM BUTTONS CLEARED.", K.back("btns"))
-
-
-# ===================================================================== delivery mode (forward / stream)
-
-@action("mode")
-async def a_mode(update, context, args):
-    msg = ""
-    if args and args[0] in ("forward", "stream"):
-        if args[0] == "stream" and not streamer.ready:
-            msg = f"⚠️ STREAMING IS UNAVAILABLE ▸ <code>{esc(streamer.error or 'engine not running')}</code>"
-        else:
-            await S.set("delivery_mode", args[0])
-            msg = "✅ SAVED."
-    cur = S.get("delivery_mode")
-    engine = "READY" if streamer.ready else f"OFF ({esc(streamer.error or 'not started')})"
-
-    def b(m, label):
-        return ub(("✅ " if cur == m else "") + label, f"adm:mode:{m}")
-
-    await show(update,
-               note(msg) + head("🎬", "Delivery Mode",
-                                f"MODE ▸ <b>{'STREAM' if cur == 'stream' else 'FORWARD'}</b> · ENGINE ▸ <b>{engine}</b>\n\n"
-                                "📩 <b>FORWARD</b> ▸ FILES ARE SENT IN CHAT.\n"
-                                "🌐 <b>STREAM</b> ▸ STREAM + DOWNLOAD BUTTONS."),
-               kb([[b("forward", "📩 Forward"), b("stream", "🌐 Stream")]], ub("🔙 Back", "adm:settings")))
 
 
 # ===================================================================== auto-delete / protect
