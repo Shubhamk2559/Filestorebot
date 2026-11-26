@@ -71,12 +71,31 @@ async def _per_period(col, field: str, since: float, fmt: str) -> dict:
         return {}
 
 
+EARN = ("rev", "imp", "clk", "valued")   # earning numbers: counted per UTC day (Monetag's day); the rest per IST day
+
+
+def _today_utc() -> dt.date:
+    return dt.datetime.now(dt.timezone.utc).date()
+
+
+def _range_utc(n: int):
+    t = _today_utc()
+    return [t - dt.timedelta(days=i) for i in range(n)]
+
+
 async def _daily_docs(first: str = "") -> dict:
     q = {"_id": {"$gte": first}} if first else {}
-    return {d["_id"]: d async for d in db.stats_col.find(q)}
+    docs = {d["_id"]: d async for d in db.stats_col.find(q)}
+    async for e in db.earn_col.find(q):                    # days tracked in UTC replace the old IST earning numbers
+        x = docs.setdefault(e["_id"], {"_id": e["_id"]})
+        for f in EARN:
+            x[f] = e.get(f, 0) or 0
+    return docs
 
 
 def _sum(docs: dict, days, field: str):
+    if field in EARN:                                      # "today", "7 days"... for earnings are UTC days
+        days = _range_utc(len(days))
     return sum(docs.get(str(d), {}).get(field, 0) or 0 for d in days)
 
 
@@ -141,7 +160,7 @@ async def _summary(update):
         "📈 <b>EARNINGS</b>\n\n"
         + _table(rows, [10, 10]) +
         f"🎯 eCPM ▸ <b>{ecpm}</b> · PER VIEW ▸ <b>{per_view}</b>\n"
-        "<i>MONETAG ESTIMATE · FINAL PAYOUT IS IN MONETAG.</i>" + note,
+        "<i>MONETAG ESTIMATE · DAYS CHANGE AT 12:00 UTC (5:30 AM IST), LIKE MONETAG.</i>" + note,
         _kb(),
     )
 
