@@ -91,6 +91,13 @@ DEFAULTS = {
     "ads_tries": 3,               # no-fill tries before files are given without an ad
     "ads_last_postback": 0,
     "ads_admin_test": False,      # show the ad gate to admins too (for testing)
+    # ---- Support Bot (handlers/support.py): a second bot, one forum topic per user
+    "support_token": "",          # token of the Support Bot (sent by the owner in the panel)
+    "support_username": "",
+    "support_enabled": False,
+    "support_group": None,        # {"id": int, "title": str} - forum group where every user gets a topic
+    "support_in_posts": True,     # add the "Video not playing? Support" button to autoposter channel posts
+    "support_btn": "",            # custom button text ("" = default)
     # ---- Backup (utils/backup.py)
     "auto_backup": True,          # send a backup file to the owner every 24 h
     "bk_last": 0,                 # time of the last backup
@@ -115,7 +122,9 @@ class SettingsCache:
         self._data[key] = value
         await settings_col.update_one({"_id": "main"}, {"$set": {key: value}}, upsert=True)
 
-    async def reset(self, keep=("admins", "db_channel", "ads_secret", "bk_last", "imgbb_key", "imgbb_keys", "telegraph_token")):
+    async def reset(self, keep=("admins", "db_channel", "ads_secret", "bk_last", "imgbb_key", "imgbb_keys", "telegraph_token",
+                                                 "support_token", "support_username", "support_enabled", "support_group",
+                                                 "support_in_posts", "support_btn")):
         """Restore defaults but keep admins and the database channel."""
         kept = {k: self._data.get(k) for k in keep}
         fresh = copy.deepcopy(DEFAULTS)
