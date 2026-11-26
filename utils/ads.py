@@ -26,7 +26,7 @@ import math
 import re
 import secrets
 import time
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl
 
 from aiohttp import web
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, WebAppInfo
@@ -136,9 +136,9 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
         return False   # admins skip ads (turn on "Test as admin" in Panel -> Ads to see the gate yourself)
     if not zone() or not mini_app_ready():
         await notify_owner(bot, "ads_cfg",
-                           "⚠️ Ads are ON but not configured: "
-                           f"{'Zone ID is missing' if not zone() else 'BASE_URL is not a public https URL'}. "
-                           "Files are being delivered WITHOUT ads until you fix it in Panel → Ads.", every=300)
+                           "⚠️ <b>ADS NOT CONFIGURED</b>\n\n"
+                           f"{'ZONE ID IS MISSING' if not zone() else 'BASE_URL IS NOT A PUBLIC HTTPS URL'}.\n"
+                           "FILES GO OUT WITHOUT ADS UNTIL YOU FIX IT IN PANEL ▸ MONETIZATION ▸ ADS.", every=300)
         return False
 
     # one open gate per user: close the previous one
@@ -161,10 +161,10 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
     try:
         msg = await call(
             bot.send_message, chat_id,
-            "🎬 <b>Watch a short ad to unlock your files</b>\n\n"
-            "Tap the button below, watch the ad till the end, and your files arrive here automatically.\n\n"
-            "⚠️ Please turn off any <b>ad blocker / ad-blocking DNS / Private DNS</b> first.",
-            reply_markup=M([[B("🎬 Watch Ad & Get Files",
+            "🎬 <b>WATCH AN AD TO UNLOCK</b>\n\n"
+            "TAP THE BUTTON AND WATCH TILL THE END. YOUR FILES ARRIVE HERE.\n"
+            "⚠️ TURN OFF ANY <b>AD BLOCKER / PRIVATE DNS</b> FIRST.",
+            reply_markup=M([[B("🎬 WATCH AD & GET FILES",
                                web_app=WebAppInfo(url=f"{config.BASE_URL}/ad?s={sid}"))]]),
             parse_mode=ParseMode.HTML)
         await db.ads_col.update_one({"_id": sid}, {"$set": {"msg_id": msg.message_id}})
@@ -172,8 +172,8 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
     except TelegramError as e:
         log.warning("Ad gate could not be sent: %s", e)
         await notify_owner(bot, "ads_send",
-                           f"⚠️ Ad gate could not be sent, so files were delivered without an ad.\nReason: {e}\n"
-                           f"Mini App URL used: {config.BASE_URL}/ad  (must be a public https URL)", every=300)
+                           "⚠️ <b>AD GATE NOT SENT</b>\n\nFILES WERE DELIVERED WITHOUT AN AD.\n"
+                           f"<code>{e}</code>\nMINI APP URL ▸ <code>{config.BASE_URL}/ad</code> (PUBLIC HTTPS REQUIRED)", every=300)
         await db.ads_col.update_one({"_id": sid}, {"$set": {"status": "expired"}})
         return False  # can't show the gate (user blocked bot / Telegram error) -> normal delivery path decides
     return True
@@ -391,7 +391,7 @@ async def _deliver_after_ad(bot, s):
             pass
     link = await db.get_link(s["token"])
     if not link:
-        await call(bot.send_message, s["uid"], "❌ This link is invalid or has been revoked.")
+        await call(bot.send_message, s["uid"], "❌ <b>INVALID LINK</b>\n\nTHIS LINK IS WRONG OR REVOKED.")
         return
     try:
         await start.deliver(bot, s["uid"], link)

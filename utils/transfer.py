@@ -38,7 +38,7 @@ def available() -> Optional[str]:
     if not config.API_ID or not config.API_HASH:
         return "API_ID / API_HASH are missing in .env (get them from https://my.telegram.org)."
     try:
-        import pyrogram
+        import pyrogram  # noqa: F401  (availability probe)
     except ImportError:
         return "pyrofork is not installed."
     return None

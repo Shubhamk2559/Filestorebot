@@ -121,9 +121,9 @@ async def send_backup(bot, chat_id: int, auto: bool = False):
     files, counts, head = await build_backup(bot)
     total = len(files)
     for i, (fname, data) in enumerate(files, 1):
-        cap = (f"💾 <b>{'Auto-backup' if auto else 'Backup'}</b> · {head['created_str']}\n"
+        cap = (f"💾 <b>{'AUTO-BACKUP' if auto else 'BACKUP'}</b> · {head['created_str']}\n"
                f"👥 {counts['users']} · 🔗 {counts['links']} · 📁 {counts['files']}"
-               + (f"\nPart {i}/{total}" if total > 1 else ""))
+               + (f"\nPART {i}/{total}" if total > 1 else ""))
         await call(bot.send_document, chat_id, document=io.BytesIO(data), filename=fname, caption=cap,
                    read_timeout=180, write_timeout=180, connect_timeout=30)
     await S.set("bk_last", time.time())
@@ -230,20 +230,20 @@ async def _restore_start_image(bot, chat_id: int, b64, mode: str) -> str:
     """File ids belong to ONE bot: upload the saved picture again so the NEW bot gets its own file id."""
     cur = S.get("start_image")
     if mode == "merge" and cur and await _file_id_ok(bot, cur):
-        return "kept"
+        return "KEPT"
     if not b64:
         if mode == "full" or cur:
             await S.set("start_image", None)
-        return "not in backup"
+        return "NOT IN BACKUP"
     try:
         m = await call(bot.send_photo, chat_id, photo=io.BytesIO(base64.b64decode(b64)),
-                       caption="🖼 Start image restored.")
+                       caption="🖼 START IMAGE RESTORED.")
         await S.set("start_image", m.photo[-1].file_id)
-        return "restored"
+        return "RESTORED"
     except TelegramError as e:
         log.warning("Start image restore failed: %s", e)
         await S.set("start_image", None)
-        return "failed - set it again"
+        return "FAILED, SET IT AGAIN"
 
 
 async def check_access(bot) -> list:
@@ -252,9 +252,9 @@ async def check_access(bot) -> list:
     targets = []
     ch = S.get("db_channel")
     if ch:
-        targets.append(("Database Channel", ch["id"], ch.get("title"), True))
+        targets.append(("DB Channel", ch["id"], ch.get("title"), True))
     for c in S.get("fsub_channels"):
-        targets.append(("Force-sub", c["id"], c.get("title"), False))
+        targets.append(("Force-Sub", c["id"], c.get("title"), False))
     for c in await db.ap_list_channels():
         targets.append(("Autoposter", c["_id"], c.get("title"), True))
     problems = []
@@ -263,12 +263,12 @@ async def check_access(bot) -> list:
         try:
             m = await bot.get_chat_member(cid, me.id)
         except TelegramError:
-            problems.append(f"{label} <b>{name}</b>: not reachable")
+            problems.append(f"{label} ▸ <b>{name}</b>: NOT REACHABLE")
             continue
         if m.status not in ("administrator", "creator"):
-            problems.append(f"{label} <b>{name}</b>: bot is not an admin")
+            problems.append(f"{label} ▸ <b>{name}</b>: BOT IS NOT ADMIN")
         elif need_post and getattr(m, "can_post_messages", None) is False:
-            problems.append(f"{label} <b>{name}</b>: needs “Post Messages”")
+            problems.append(f"{label} ▸ <b>{name}</b>: NEEDS “POST MESSAGES”")
     return problems
 
 
@@ -297,18 +297,18 @@ async def restore(bot, chat_id: int, parts: list, mode: str) -> str:
     problems = await check_access(bot)
 
     ap_ch, ap_posts = len(docs["ap_channels"]), len(docs["ap_posts"])
-    text = ("✅ <b>Restore complete</b>\n\n"
-            f"👥 Users: {len(docs['users'])}\n"
-            f"🔗 Links: {len(docs['links'])}\n"
-            f"📁 Files: {len(docs['files'])}\n"
-            f"📅 Autoposter: {ap_ch} channel(s), {ap_posts} post(s)\n"
-            f"🖼 Start image: {img}")
+    text = ("✅ <b>RESTORE COMPLETE</b>\n\n"
+            f"👥 USERS ▸ <b>{len(docs['users'])}</b>\n"
+            f"🔗 LINKS ▸ <b>{len(docs['links'])}</b>\n"
+            f"📁 FILES ▸ <b>{len(docs['files'])}</b>\n"
+            f"📅 AUTOPOSTER ▸ <b>{ap_ch}</b> CHANNELS · <b>{ap_posts}</b> POSTS\n"
+            f"🖼 START IMAGE ▸ <b>{img}</b>")
     if problems:
-        text += "\n\n⚠️ <b>Action needed</b>\n" + "\n".join(f"• {p}" for p in problems)
-        text += "\n\nAdd the bot as admin there, then everything works as before."
-        if any(p.startswith("Database Channel") for p in problems):
-            text += ("\n\nIf the Database Channel was deleted: create a new one, add the bot as admin, "
-                     "set it under <b>Database Channel</b>, then forward the old files into it. "
-                     "Links are rebuilt from their caption codes.")
+        text += "\n\n⚠️ <b>ACTION NEEDED</b>\n" + "\n".join(f"• {p}" for p in problems)
+        text += "\n\nADD THE BOT AS ADMIN THERE, THEN EVERYTHING WORKS AS BEFORE."
+        if any(p.startswith("DB Channel") for p in problems):
+            text += ("\n\nDATABASE CHANNEL DELETED? CREATE A NEW ONE, ADD THE BOT AS ADMIN, SET IT UNDER "
+                     "<b>SETTINGS ▸ DB CHANNEL</b>, THEN FORWARD THE OLD FILES INTO IT. "
+                     "LINKS ARE REBUILT FROM THEIR CAPTION CODES.")
     return text
 

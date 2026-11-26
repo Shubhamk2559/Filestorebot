@@ -14,10 +14,8 @@ Every other tile opens the matching screen in the bot chat (op "open") - those s
 """
 import asyncio
 import datetime as dt
-import html
 import logging
 import re
-import time
 from pathlib import Path
 
 from aiohttp import web
@@ -132,7 +130,7 @@ async def op_bc_send(uid, b, bot):
         raise Err(f"Telegram rejected the message: {e}")
     if b.get("test"):
         return {"test": True}
-    status = await bot.send_message(uid, "📢 <b>Broadcasting…</b>\n\nStarting…")
+    status = await bot.send_message(uid, "📢 <b>BROADCASTING</b>\n\nSTARTING…")
     live = _BC[uid] = {"total": 0, "done": 0, "sent": 0, "blocked": 0, "failed": 0, "finished": False}
 
     async def job():
@@ -575,8 +573,8 @@ async def op_open(uid, b, bot):
     act = str(b.get("action") or "")
     if act not in OPEN_ACTIONS:
         raise Err("unknown screen")
-    await bot.send_message(uid, f"{OPEN_ACTIONS[act]}\n\nTap the button to open it here in the chat.",
-                           reply_markup=M([[B(f"Open {OPEN_ACTIONS[act]}", callback_data=f"adm:{act}")]]))
+    await bot.send_message(uid, f"<b>{OPEN_ACTIONS[act].upper()}</b>\n\nTAP THE BUTTON TO OPEN IT HERE.",
+                           reply_markup=M([[B(f"OPEN {OPEN_ACTIONS[act].upper()}", callback_data=f"adm:{act}")]]))
     return {}
 
 
@@ -629,4 +627,4 @@ def open_button():
     """Inline button that opens the panel as a Mini App (needs a public https BASE_URL)."""
     if not config.BASE_URL.startswith("https://"):
         return None
-    return B("🌐 Open Web Panel", web_app=WebAppInfo(url=f"{config.BASE_URL}/admin"))
+    return B("🌐 OPEN WEB PANEL", web_app=WebAppInfo(url=f"{config.BASE_URL}/admin"))

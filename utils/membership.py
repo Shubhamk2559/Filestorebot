@@ -6,6 +6,7 @@ Force-subscribe check for MANY channels using get_chat_member with a small cache
    the owner gets a throttled warning instead.
 """
 import asyncio
+import html
 import logging
 import time
 
@@ -44,9 +45,9 @@ async def _is_member(bot, user_id: int, ch: dict) -> bool:
             log.warning("Force-sub check failed for %s: %s", ch["id"], e)
             await notify_owner(
                 bot, f"fsub{ch['id']}",
-                f"⚠️ Force-Sub check failed for \"{ch.get('title')}\": {e}\n"
-                "Make sure the bot is an admin there, or remove the channel. "
-                "Users are not blocked in the meantime.")
+                f"⚠️ <b>FORCE-SUB CHECK FAILED</b>\n\n<b>{html.escape(str(ch.get('title')))}</b>\n"
+                f"<code>{html.escape(str(e))}</code>\n\n"
+                "MAKE SURE THE BOT IS ADMIN THERE, OR REMOVE THE CHANNEL.\nUSERS ARE NOT BLOCKED MEANWHILE.")
             return True
         except TelegramError as e:
             log.warning("Membership check error: %s", e)

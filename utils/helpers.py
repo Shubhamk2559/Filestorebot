@@ -32,7 +32,7 @@ async def _deny(update):
     q = update.callback_query
     if q:
         try:
-            await q.answer("⛔ Not allowed", show_alert=True)
+            await q.answer("⛔ NOT ALLOWED", show_alert=True)
         except TelegramError:
             pass
 

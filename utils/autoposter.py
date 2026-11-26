@@ -241,12 +241,12 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
             return
         last_edit = time.time()
         head = "⏳ <b>CREATING POSTS…</b>" if not final else ("✅ <b>POSTS CREATED</b>" if not error else "⚠️ <b>STOPPED</b>")
-        text = (f"{head}\n\n📝 POSTS: {made}\n📁 FILES: {copied_files}/{total_files}\n")
+        text = (f"{head}\n\n📝 POSTS ▸ <b>{made}</b>\n📁 FILES ▸ <b>{copied_files}/{total_files}</b>\n")
         if skipped:
-            text += f"⏭ SKIPPED (NO FILES BELOW CAPTION): {skipped}\n"
+            text += f"⏭ SKIPPED (NO FILES BELOW CAPTION) ▸ {skipped}\n"
         if orphans:
-            text += (f"⏭ IGNORED (NO IMAGE / VIDEO PARTNER): {orphans}\n" if pair_mode
-                     else f"⏭ IGNORED (BEFORE FIRST CAPTION): {orphans}\n")
+            text += (f"⏭ IGNORED (NO IMAGE / VIDEO PARTNER) ▸ {orphans}\n" if pair_mode
+                     else f"⏭ IGNORED (BEFORE FIRST CAPTION) ▸ {orphans}\n")
         if error:
             text += f"\n❌ <code>{html.escape(error)}</code>"
         try:
