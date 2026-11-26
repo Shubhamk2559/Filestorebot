@@ -42,6 +42,8 @@ users_col = db["users"]
 links_col = db["links"]
 files_col = db["files"]
 pending_col = db["pending_deletes"]
+earn_col = db["earn_stats"]        # _id="YYYY-MM-DD" (UTC, same as Monetag): rev, imp, clk, valued
+pb_col = db["postback_seen"]     # recent Monetag postbacks (dedupe, auto-expire)
 ads_col = db["ad_sessions"]      # one-time Mini App ad sessions (auto-expire)
 usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<links opened today>
 ap_channels_col = db["ap_channels"]   # Autoposter targets: _id=chat id, slots, enabled, done
@@ -134,6 +136,7 @@ async def init_db():
     await files_col.create_index("code")
     await usage_col.create_index("expire_at", expireAfterSeconds=0)  # old counters clean themselves
     await ads_col.create_index("expire_at", expireAfterSeconds=0)
+    await pb_col.create_index("expire_at", expireAfterSeconds=0)
     await vps_col.create_index("expire_at", expireAfterSeconds=0)   # VPS usage history is kept ~13 months
     await ads_col.create_index([("uid", 1), ("status", 1)])
     await ap_posts_col.create_index([("chan", 1), ("seq", 1)])
@@ -317,6 +320,15 @@ async def stat_inc(**fields):
     """Add to today's counters (IST day). Analytics must never break the bot, so errors are swallowed."""
     try:
         await stats_col.update_one({"_id": _today()}, {"$inc": fields}, upsert=True)
+    except Exception:
+        pass
+
+
+async def earn_inc(**fields):
+    """Add to today's EARNING counters. Day = UTC, because Monetag's dashboard changes day at 00:00 UTC."""
+    try:
+        day = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        await earn_col.update_one({"_id": day}, {"$inc": fields}, upsert=True)
     except Exception:
         pass
 
