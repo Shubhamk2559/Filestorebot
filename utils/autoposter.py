@@ -31,6 +31,7 @@ from utils.helpers import call, notify_owner
 from utils.links import share_link
 from utils import preview as PV
 from utils import batch as BT
+from utils import support as SUP
 
 log = logging.getLogger(__name__)
 
@@ -324,7 +325,7 @@ async def send_post(bot, chat_id: int, post: dict, mark: bool = True):
     else:
         thumb = await db.thumb_msg_id(db.make_code(post["thumb_token"], 0))
         btn = (ch.get("btn") or "").strip() or DEFAULT_BTN
-        kb = M([[B(btn, url=share_link(bot.username, post["_id"]))]])
+        kb = SUP.attach_post(M([[B(btn, url=share_link(bot.username, post["_id"]))]]), post["_id"])
     if not thumb:
         return ("fixed thumbnail not set (Caption & Button -> Fixed Thumbnail)" if post.get("ptype") == "pair"
                 else "thumbnail not found in the Database Channel")
@@ -373,7 +374,8 @@ async def _send_batch(bot, chat_id: int, channel: dict, post: dict):
             video = share_link(bot.username, post["vtoken"]) if post.get("vtoken") else ""
             cap = BT.apply_tags(cap, post.get("tg_url") or "", video, number)
         try:
-            await call(bot.copy_message, chat_id, channel["id"], thumb, caption=_fit(cap), parse_mode=ParseMode.HTML)
+            await call(bot.copy_message, chat_id, channel["id"], thumb, caption=_fit(cap), parse_mode=ParseMode.HTML,
+                       reply_markup=SUP.attach_post(None, post.get("vtoken") or ""))
         except TelegramError as e:
             return str(e)
         await BT.after_posted(chat_id, post, number if tags_on else None)
@@ -393,8 +395,8 @@ async def _pair_media(bot, ch: dict, post: dict):
     img_url = post.get("preview_url")
     if not img_url or not await PV.alive(img_url, post.get("image_url")):
         img_url = share_link(bot.username, post["_id"])
-    kb = M([[B(b_img, url=img_url),
-             B(b_vid, url=share_link(bot.username, post["vtoken"]))]])
+    kb = SUP.attach_post(M([[B(b_img, url=img_url),
+                             B(b_vid, url=share_link(bot.username, post["vtoken"]))]]), post["vtoken"])
     return thumb, kb
 
 

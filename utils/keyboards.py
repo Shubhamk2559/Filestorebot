@@ -77,14 +77,18 @@ def main_panel(owner: bool):
     return kb(grid(items), ub("✖️ Close", "adm:close"))
 
 
-def settings_panel():
-    return kb(grid([
+def settings_panel(owner: bool = False):
+    items = [
         ("📡 DB Channel", "adm:dbch"), ("🔔 Force-Sub", "adm:fsub"),
         ("🖼 Start Image", "adm:simg"), ("📝 Start Caption", "adm:scap"),
         ("🔘 Join Buttons", "adm:btns"), ("⏱ Auto-Delete", "adm:autodel"),
         ("🎬 Delivery", "adm:mode"), ("🛡 Protect", "adm:protect"),
-        ("🏷 File Caption", "adm:fcap"), ("♻️ Reset", "adm:reset"),
-    ]), ub("🔙 Back", "adm:home"))
+        ("🏷 File Caption", "adm:fcap"),
+    ]
+    if owner:
+        items.append(("🛟 Support", "adm:sup"))
+    items.append(("♻️ Reset", "adm:reset"))
+    return kb(grid(items), ub("🔙 Back", "adm:home"))
 
 
 def users_panel(owner: bool):

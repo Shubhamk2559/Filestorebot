@@ -17,6 +17,7 @@ import os
 from aiohttp import web
 
 import config
+from utils import support as SUP
 
 STATIC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
 EXTS = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
@@ -85,6 +86,9 @@ async def page(request: web.Request) -> web.Response:
     chans = "".join(
         f'<a class="ch" href="{html.escape(links.get(n.lower()) or _link(request.app.get("bot")), quote=True)}" '
         f'target="_blank" rel="noopener"><em>{ico}</em><span>{html.escape(n)}</span></a>' for n, ico in CHANNELS)
+    sup_url = SUP.url()
+    sup = (f'<a class="sup" href="{html.escape(sup_url, quote=True)}" target="_blank" rel="noopener">'
+           f'🛟 {html.escape(SUP.button_text().lstrip("🛟 "))}</a>') if sup_url else ""
     glyphs = ["♥", "✦", "💋", "♥", "✦", "♥", "💋", "✦", "♥"]
     stars = "".join(f'<i style="left:{x}%;animation-delay:{d}s;animation-duration:{t}s;font-size:{z}px">{g}</i>'
                     for (x, d, t, z), g in zip([(6, 0, 11, 16), (18, 3, 14, 13), (30, 6, 12, 18), (44, 1, 15, 14),
@@ -153,6 +157,7 @@ box-shadow:0 0 16px rgba(255,45,149,.35),0 0 14px rgba(255,45,149,.2) inset;back
 .on{{margin-top:16px;color:var(--pink2);font-family:Pacifico,cursive;font-size:1.2rem;text-shadow:0 0 14px rgba(255,45,149,.8)}}
 .on b{{display:inline-block;width:9px;height:9px;border-radius:50%;background:#3dff8b;margin-right:8px;box-shadow:0 0 10px #3dff8b;animation:blink 1.6s infinite}}
 @keyframes blink{{50%{{opacity:.35}}}}
+.sup{{display:inline-block;margin-top:14px;color:var(--muted);font-size:.92rem;text-decoration:underline;text-underline-offset:3px}}
 small{{display:block;margin-top:22px;color:#b98aa6;font-size:.78rem}}
 @media (prefers-reduced-motion:reduce){{*{{animation:none!important}}}}
 </style></head>
@@ -166,6 +171,7 @@ small{{display:block;margin-top:22px;color:#b98aa6;font-size:.78rem}}
 <nav class="chs">{chans}</nav>
 <a class="btn" style="margin-top:18px" href="{link}">{plane}<span>{button}</span></a>
 <div class="on"><b></b>Always Online ♡</div>
+{sup}
 <small>18+ only. By continuing you confirm you are an adult.</small>
 </main></body></html>"""
     return web.Response(text=body, content_type="text/html", headers={"Cache-Control": "public, max-age=300"})

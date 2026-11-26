@@ -37,6 +37,7 @@ import config
 from database import db
 from database.db import settings as S
 from utils.ads_page import PAGE
+from utils import support as SUP
 from utils.helpers import call, is_admin, notify_owner
 
 log = logging.getLogger(__name__)
@@ -165,7 +166,7 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
             "TAP THE BUTTON AND WATCH TILL THE END. YOUR FILES ARRIVE HERE.\n"
             "⚠️ TURN OFF ANY <b>AD BLOCKER / PRIVATE DNS</b> FIRST.",
             reply_markup=M([[B("🎬 WATCH AD & GET FILES",
-                               web_app=WebAppInfo(url=f"{config.BASE_URL}/ad?s={sid}"))]]),
+                               web_app=WebAppInfo(url=f"{config.BASE_URL}/ad?s={sid}"))]] + SUP.row(link["_id"])),
             parse_mode=ParseMode.HTML)
         await db.ads_col.update_one({"_id": sid}, {"$set": {"msg_id": msg.message_id}})
         await db.stat_inc(gates=1)

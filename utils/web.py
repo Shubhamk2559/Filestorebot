@@ -121,6 +121,15 @@ async def open_link(request: web.Request) -> web.StreamResponse:
                         headers={"Cache-Control": "no-store"})
 
 
+async def open_support(request: web.Request) -> web.StreamResponse:
+    """https://yourdomain/support  ->  the CURRENT Support Bot (permanent link, survives a Support Bot change)."""
+    from utils import support as SUP
+    target = SUP.url()
+    if not target:
+        raise web.HTTPNotFound(text="Support is not available right now.")
+    raise web.HTTPFound(target, headers={"Cache-Control": "no-store"})
+
+
 async def start_web_server(port: int, bot=None):
     async def health(request):
         try:
@@ -138,6 +147,7 @@ async def start_web_server(port: int, bot=None):
     app.router.add_get("/", home.page)                       # landing page (utils/home.py)
     app.router.add_get("/assets/home-image", home.image)
     app.router.add_get("/health", health)
+    app.router.add_get("/support", open_support)             # permanent link to the Support Bot
     app.router.add_route("GET", "/dl/{token}/{msg_id}", stream_file)
     app.router.add_route("HEAD", "/dl/{token}/{msg_id}", stream_file)
     app.router.add_get("/{token:[A-Za-z0-9_-]{6,64}}", open_link)   # keep LAST: fixed routes above win
