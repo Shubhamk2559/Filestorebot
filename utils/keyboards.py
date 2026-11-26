@@ -82,7 +82,7 @@ def settings_panel(owner: bool = False):
         ("📡 DB Channel", "adm:dbch"), ("🔔 Force-Sub", "adm:fsub"),
         ("🖼 Start Image", "adm:simg"), ("📝 Start Caption", "adm:scap"),
         ("🔘 Join Buttons", "adm:btns"), ("⏱ Auto-Delete", "adm:autodel"),
-        ("🎬 Delivery", "adm:mode"), ("🛡 Protect", "adm:protect"),
+        ("🛡 Protect", "adm:protect"),
         ("🏷 File Caption", "adm:fcap"),
     ]
     if owner:

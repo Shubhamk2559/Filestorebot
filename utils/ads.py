@@ -133,6 +133,9 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
     """Send the 'watch ad' Mini App button. True = gate sent (don't deliver yet), False = deliver right away."""
     if not S.get("ads_enabled"):
         return False
+    need = await db.link_ads(link)                       # channel-wise (live): how many ads (0 = none)
+    if need <= 0:
+        return False
     if is_admin(chat_id) and not S.get("ads_admin_test"):
         return False   # admins skip ads (turn on "Test as admin" in Panel -> Ads to see the gate yourself)
     if not zone() or not mini_app_ready():
@@ -156,13 +159,14 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
     await db.ads_col.insert_one({
         "_id": sid, "uid": chat_id, "token": link["_id"], "status": "open", "created": now,
         "exp": now + SESSION_TTL, "expire_at": _utcnow() + dt.timedelta(seconds=SESSION_TTL + 600),
+        "need": need, "done_n": 0,
         "attempts": 0, "fails": 0, "outcome_n": 0, "attempt_started": 0.0,
         "ad_seen": False, "shown": False, "fallback": False, "blocked": None, "probe_at": 0.0,
     })
     try:
         msg = await call(
             bot.send_message, chat_id,
-            "🎬 <b>WATCH AN AD TO UNLOCK</b>\n\n"
+            f"🎬 <b>WATCH {'AN AD' if need == 1 else f'{need} ADS'} TO UNLOCK</b>\n\n"
             "TAP THE BUTTON AND WATCH TILL THE END. YOUR FILES ARRIVE HERE.\n"
             "⚠️ TURN OFF ANY <b>AD BLOCKER / PRIVATE DNS</b> FIRST.",
             reply_markup=M([[B("🎬 WATCH AD & GET FILES",
@@ -371,6 +375,17 @@ async def api_claim(request):
         return _reply(ok=False, state="closed")
     if not _verified(s):
         return _reply(ok=False, state="not_verified")
+    need, done_n = int(s.get("need", 1)), int(s.get("done_n", 0))
+    if not s.get("fallback") and done_n + 1 < need:        # more ads to watch: reset the session for the next one
+        nxt = await db.ads_col.find_one_and_update(
+            {"_id": s["_id"], "status": "open", "done_n": done_n},
+            {"$set": {"attempts": 0, "fails": 0, "outcome_n": 0, "attempt_started": 0.0, "ad_seen": False,
+                      "shown": False, "exp": time.time() + SESSION_TTL,
+                      "expire_at": _utcnow() + dt.timedelta(seconds=SESSION_TTL + 600)},
+             "$inc": {"done_n": 1}})
+        if nxt:
+            await bump("verified")
+        return _reply(ok=True, state="next", done=done_n + 1, need=need)
     taken = await db.ads_col.find_one_and_update({"_id": s["_id"], "status": "open"},
                                                  {"$set": {"status": "done", "done_at": time.time()}})
     if not taken:                                           # lost a race with a second claim: files go out once

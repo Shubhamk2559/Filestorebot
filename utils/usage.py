@@ -5,14 +5,13 @@ VPS usage tracker + Contabo plan advisor.
 What it does
   * every SAMPLE_EVERY seconds it reads CPU / RAM / network from /proc (Linux, no extra packages)
   * numbers are summed into one MongoDB document per IST hour (collection vps_usage, kept 13 months)
-  * web.py reports every streamed byte + concurrent viewers through stream_open/stream_close/stream_bytes_add
   * handlers/usage.py turns the hourly documents into Daily / Weekly / Monthly screens
   * recommend() picks the cheapest Contabo plan that fits the real usage (+ safety headroom)
 
 Notes
   * CPU and RAM are VPS-wide (a Docker container sees the host's /proc/stat and /proc/meminfo).
   * Network counters are the bot container's own interface = the traffic the bot really sends
-    (stream/download links, Telegram uploads, MongoDB). Caddy's TLS overhead is negligible.
+    (ads page, Telegram uploads, MongoDB). Caddy's TLS overhead is negligible.
   * Files delivered inside Telegram chats are sent by Telegram's servers, NOT by your VPS.
 """
 import asyncio
@@ -129,28 +128,7 @@ def other_plans() -> list:
     return list(OTHER_PLANS)
 
 
-# --------------------------------------------------------------------------- live counters (written by web.py)
-class _Live:
-    streams = 0            # viewers streaming/downloading right now
-    streams_max = 0        # peak concurrent viewers since the last flush
-    stream_bytes = 0       # bytes sent through /dl since the last flush
-
-
-live = _Live()
 last = {}                  # newest sample, shown as "Right now" in the panel
-
-
-def stream_open():
-    live.streams += 1
-    live.streams_max = max(live.streams_max, live.streams)
-
-
-def stream_close():
-    live.streams = max(0, live.streams - 1)
-
-
-def stream_bytes_add(n: int):
-    live.stream_bytes += n
 
 
 # --------------------------------------------------------------------------- /proc readers
@@ -208,9 +186,9 @@ def _hour_key() -> str:
 
 
 def _new_acc(key: str) -> dict:
-    return {"key": key, "n": 0, "cpu_sum": 0.0, "ram_sum": 0.0, "net_in": 0, "net_out": 0, "stream_bytes": 0,
+    return {"key": key, "n": 0, "cpu_sum": 0.0, "ram_sum": 0.0, "net_in": 0, "net_out": 0,
             "cpu_max": 0.0, "ram_max": 0.0, "ram_used_mb_max": 0.0, "bot_rss_mb_max": 0.0,
-            "mbps_max": 0.0, "streams_max": 0, "load_max": 0.0, "static": {}}
+            "mbps_max": 0.0, "load_max": 0.0, "static": {}}
 
 
 async def _flush(acc: dict):
@@ -218,11 +196,11 @@ async def _flush(acc: dict):
         return
     doc = {
         "$inc": {"n": acc["n"], "cpu_sum": round(acc["cpu_sum"], 2), "ram_sum": round(acc["ram_sum"], 2),
-                 "net_in": acc["net_in"], "net_out": acc["net_out"], "stream_bytes": acc["stream_bytes"]},
+                 "net_in": acc["net_in"], "net_out": acc["net_out"]},
         "$max": {"cpu_max": round(acc["cpu_max"], 1), "ram_max": round(acc["ram_max"], 1),
                  "ram_used_mb_max": round(acc["ram_used_mb_max"], 1),
                  "bot_rss_mb_max": round(acc["bot_rss_mb_max"], 1), "mbps_max": round(acc["mbps_max"], 2),
-                 "streams_max": acc["streams_max"], "load_max": round(acc["load_max"], 2)},
+                 "load_max": round(acc["load_max"], 2)},
         "$set": {**acc["static"], "expire_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=KEEP_DAYS)},
     }
     try:
@@ -261,7 +239,6 @@ async def usage_loop():
                 rss = _read_rss_mb()
                 du = shutil.disk_usage("/")
                 load1 = os.getloadavg()[0] if hasattr(os, "getloadavg") else 0.0
-                sbytes, live.stream_bytes = live.stream_bytes, 0
 
                 key = _hour_key()
                 if key != acc["key"]:                          # a new IST hour started
@@ -273,19 +250,16 @@ async def usage_loop():
                 acc["ram_sum"] += ram_pct
                 acc["net_in"] += d_in
                 acc["net_out"] += d_out
-                acc["stream_bytes"] += sbytes
                 acc["cpu_max"] = max(acc["cpu_max"], cpu_pct)
                 acc["ram_max"] = max(acc["ram_max"], ram_pct)
                 acc["ram_used_mb_max"] = max(acc["ram_used_mb_max"], used_mb)
                 acc["bot_rss_mb_max"] = max(acc["bot_rss_mb_max"], rss)
                 acc["mbps_max"] = max(acc["mbps_max"], mbps)
-                acc["streams_max"] = max(acc["streams_max"], live.streams_max, live.streams)
                 acc["load_max"] = max(acc["load_max"], load1)
-                live.streams_max = live.streams
                 acc["static"] = {"cores": cores, "ram_total_mb": round(total_mb), "disk_total_gb": round(du.total / 1e9, 1),
                                  "disk_used_gb": round(du.used / 1e9, 1)}
                 last.update(cpu=cpu_pct, ram=ram_pct, ram_used_mb=used_mb, ram_total_mb=total_mb, mbps=mbps,
-                            streams=live.streams, bot_rss_mb=rss, cores=cores, load1=load1,
+                            bot_rss_mb=rss, cores=cores, load1=load1,
                             disk_used_gb=du.used / 1e9, disk_total_gb=du.total / 1e9, at=now)
 
                 if now - last_flush >= FLUSH_EVERY:
@@ -333,20 +307,18 @@ def rollup(docs: list, keyfn) -> dict:
     out = {}
     for d in docs:
         a = out.setdefault(keyfn(d["_id"]), {"n": 0, "cpu_sum": 0.0, "ram_sum": 0.0, "cpu_max": 0.0, "ram_max": 0.0,
-                                             "ram_mb": 0.0, "net_out": 0, "net_in": 0, "stream": 0, "mbps": 0.0,
-                                             "streams": 0, "disk_gb": 0.0, "hours": 0})
+                                             "ram_mb": 0.0, "net_out": 0, "net_in": 0, "mbps": 0.0,
+                                             "disk_gb": 0.0, "hours": 0})
         a["n"] += d.get("n", 0)
         a["hours"] += 1
         a["cpu_sum"] += d.get("cpu_sum", 0)
         a["ram_sum"] += d.get("ram_sum", 0)
         a["net_out"] += d.get("net_out", 0)
         a["net_in"] += d.get("net_in", 0)
-        a["stream"] += d.get("stream_bytes", 0)
         a["cpu_max"] = max(a["cpu_max"], d.get("cpu_max", 0))
         a["ram_max"] = max(a["ram_max"], d.get("ram_max", 0))
         a["ram_mb"] = max(a["ram_mb"], d.get("ram_used_mb_max", 0))
         a["mbps"] = max(a["mbps"], d.get("mbps_max", 0))
-        a["streams"] = max(a["streams"], d.get("streams_max", 0))
         a["disk_gb"] = max(a["disk_gb"], d.get("disk_used_gb", 0))
     for a in out.values():
         a["cpu_avg"] = a["cpu_sum"] / a["n"] if a["n"] else 0.0
@@ -355,7 +327,7 @@ def rollup(docs: list, keyfn) -> dict:
 
 
 _EMPTY = {"n": 0, "cpu_avg": 0.0, "ram_avg": 0.0, "cpu_max": 0.0, "ram_max": 0.0, "ram_mb": 0.0, "net_out": 0,
-          "net_in": 0, "stream": 0, "mbps": 0.0, "streams": 0, "disk_gb": 0.0, "hours": 0}
+          "net_in": 0, "mbps": 0.0, "disk_gb": 0.0, "hours": 0}
 
 
 def total(docs: list) -> dict:
@@ -426,7 +398,6 @@ def recommend(docs: list) -> dict:
     ram_peak_mb = max(d.get("ram_used_mb_max", 0) for d in docs)
     mbps_p95 = percentile([d.get("mbps_max", 0) for d in docs], 95)
     mbps_peak = max(d.get("mbps_max", 0) for d in docs)
-    streams_peak = max(d.get("streams_max", 0) for d in docs)
     disk_used = [d.get("disk_used_gb", 0) for d in docs if d.get("disk_used_gb")]
     disk_now = disk_used[-1] if disk_used else 0.0
     growth_30d = ((disk_used[-1] - disk_used[0]) * 30 / max(days, 1)) if len(disk_used) > 1 else 0.0
@@ -460,7 +431,7 @@ def recommend(docs: list) -> dict:
             "port": mbps_peak / pick["port"] * 100}
     return {"ok": True, "days": days, "cores": cores, "ram_total_mb": ram_total, "cpu_p95": cpu_p95,
             "cpu_peak": cpu_peak, "ram_peak_mb": ram_peak_mb, "mbps_p95": mbps_p95, "mbps_peak": mbps_peak,
-            "streams_peak": streams_peak, "disk_now": disk_now, "growth_30d": growth_30d,
+            "disk_now": disk_now, "growth_30d": growth_30d,
             "out_tb_month": out_tb_month, "need_cores": need_cores, "need_ram_gb": need_ram_gb,
             "need_disk_gb": need_disk_gb, "need_port": need_port, "pick": pick, "undersized": undersized,
             "current": cur, "util": util, "alts": alts}

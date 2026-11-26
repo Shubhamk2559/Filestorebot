@@ -5,7 +5,7 @@ Telegraph link becomes the "Preview" button (opens directly, the bot is not invo
 
   make_preview_url(db_channel_id, msg_id, title)  ->  "https://telegra.ph/..." or None
 
-Needs the imgbb API key (set from the admin panel: Autoposter -> channel -> Caption & Button -> imgbb API Key) and the MTProto engine (API_ID / API_HASH) to read the image back
+Needs the imgbb API key (set from the admin panel: Autoposter -> channel -> Caption & Button -> imgbb API Key) and the MTProto session (API_ID / API_HASH) to read the image back
 from the Database Channel. Any failure returns None, and the caller falls back to the normal bot link.
 """
 import logging
@@ -13,7 +13,7 @@ import logging
 import aiohttp
 
 from database.db import settings as S
-from utils.streamer import streamer
+from utils.mtproto import mtproto
 
 log = logging.getLogger(__name__)
 
@@ -29,10 +29,10 @@ def enabled() -> bool:
 
 async def _download(chat_id: int, msg_id: int) -> bytes:
     """Read the image bytes of a Database Channel message through the MTProto client."""
-    if not streamer.ready:
-        raise RuntimeError(f"MTProto engine not running ({streamer.error or 'API_ID / API_HASH missing'})")
-    msg = await streamer.client.get_messages(chat_id, msg_id)
-    buf = await streamer.client.download_media(msg, in_memory=True)
+    if not mtproto.ready:
+        raise RuntimeError(f"MTProto engine not running ({mtproto.error or 'API_ID / API_HASH missing'})")
+    msg = await mtproto.client.get_messages(chat_id, msg_id)
+    buf = await mtproto.client.download_media(msg, in_memory=True)
     return bytes(buf.getbuffer())
 
 

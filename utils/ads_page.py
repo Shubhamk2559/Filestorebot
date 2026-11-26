@@ -189,14 +189,21 @@ function showBlocked(){
      {steps:true,btn:"Check again"});
 }
 async function claim(){
+  /* returns true when the flow is finished, false when another ad must be watched */
   ui("📦","Sending your files…","",{spin:true});
   var c=await api("claim");
+  if(c.ok && c.state==="next"){
+    ui("✅","Ad "+c.done+" of "+c.need+" done","Next ad loading…",{spin:true});
+    await sleep(900);
+    return false;
+  }
   if(c.ok){
     ui("✅","Done!","Your files are being sent to the chat.");
     setTimeout(function(){try{tg.close()}catch(e){}},500);
   }else{
     ui("⚠️","Could not unlock","Please go back to the chat and open your file link again.");
   }
+  return true;
 }
 async function pollReady(sec){
   /* the server holds each status call open until the ad is confirmed -> we continue the instant it is */
@@ -278,7 +285,7 @@ async function run(){
       var r=await api("shown");
       if(r.state==="too_fast"){ ui("⏱","Please watch the full ad","The ad must play till the end.",{spin:true}); await sleep(2500); continue; }
       ui("🔐","Verifying…","",{spin:true});
-      if(r.state==="ready" || await pollReady(30)){ await claim(); return; }
+      if(r.state==="ready" || await pollReady(30)){ if(await claim()) return; continue; }
       ui("⚠️","Ad could not be verified","Trying again…",{spin:true}); await sleep(1200); continue;
     }
 
@@ -290,7 +297,7 @@ async function run(){
     }
     await api("probe",{blocked:false,detail:""});
     var f=await api("fail",{reason:reason});
-    if(f.state==="ready"){ await claim(); return; }
+    if(f.state==="ready"){ if(await claim()) return; continue; }
     if(f.state==="blocked"){ showBlocked(); await waitClick(); continue; }
     if(f.state==="no_fallback"||f.state==="closed"){ finalMsg(f.state); return; }
     if(f.state==="retry" && f.fails>0){

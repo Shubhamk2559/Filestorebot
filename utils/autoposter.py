@@ -277,7 +277,7 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
             title = re.sub(r"\s+", " ", plain).strip()[:40] or "Duo Reel"
             preview_url, image_url = await PV.make_preview_url(channel["id"], img_id, title)   # imgbb -> Telegraph (None = off / failed)
             await db.create_link([img_id], by, title + " (preview)", token=token, no_ads=True)
-            await db.create_link([vid_id], by, title + " (video)", token=vtoken)
+            await db.create_link([vid_id], by, title + " (video)", token=vtoken, chan=cid)
             seq += 1
             await db.ap_add_post(cid, token, None, seq, title, cap_html, "photo", 2, by,
                                  ptype="pair", vtoken=vtoken, preview_url=preview_url, image_url=image_url)
@@ -300,7 +300,7 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
             break
         th = p["thumb"]
         title = re.sub(r"\s+", " ", th["cap"]).strip()[:40] or ("Album" if p.get("album") else "Post")
-        await db.create_link(ids, by, title, token=token)
+        await db.create_link(ids, by, title, token=token, chan=cid)
         seq += 1
         await db.ap_add_post(cid, token, thumb_token, seq, title, th["cap_html"], th["kind"], len(ids), by)
         made += 1

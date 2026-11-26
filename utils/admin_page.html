@@ -182,7 +182,7 @@ function openInBot(action){return api('open',{action:action}).then(function(){to
 var SECTIONS=[
  {t:'Content',items:[['i-link','My links','View, revoke','open','links'],['i-db','Database channel','Files storage','open','dbch']]},
  {t:'Access',items:[['i-bell','Force-sub','Channels','sheet','fsub'],['i-pill','Join buttons','Custom','sheet','btns'],['i-ban','Ban / unban','Users','sheet','ban'],['i-shield','Admins','Owner only','sheet','admins',1]]},
- {t:'Start screen and files',items:[['i-image','Start image','Photo','open','simg'],['i-text','Start caption','Text','open','scap'],['i-tag','File caption','Custom','open','fcap'],['i-play','Delivery mode','How files arrive','open','mode']]},
+ {t:'Start screen and files',items:[['i-image','Start image','Photo','open','simg'],['i-text','Start caption','Text','open','scap'],['i-tag','File caption','Custom','open','fcap']]},
  {t:'Quick settings',special:'quick'},
  {t:'Growth',items:[['i-mega','Broadcast','Message all','sheet','bc'],['i-chart','Stats','Overview','sheet','stats'],['i-tv','Ads','Monetag','sheet','ads'],['i-cal','Autoposter','Schedule','sheet','ap']]},
  {t:'Owner',owner:1,items:[['i-trend','Earnings','Analytics','sheet','earnings'],['i-save','Backup','Restore','sheet','backup'],['i-swap','Transfer','Copy channels','sheet','transfer'],['i-cpu','VPS usage','CPU, RAM','sheet','vps']]}
@@ -501,7 +501,7 @@ RENDER.vps=function(){
   return api('vps').then(function(d){
     if(!d.supported){setBody(card('🖥 VPS usage','<div class="note">⚠️ Needs a Linux server (/proc not found).</div>'));return}
     var h='';
-    if(d.now){var n=d.now;h+=card('⚡ Right now','<div class="grid3"><div class="mini"><b>'+Math.round(n.cpu)+'%</b><span>CPU</span></div><div class="mini"><b>'+Math.round(n.ram)+'%</b><span>RAM</span></div><div class="mini"><b>'+(n.streams||0)+'</b><span>Streaming</span></div></div><div class="kv"><span>RAM</span><b>'+((n.ram_used_mb||0)/1024).toFixed(1)+' / '+((n.ram_total_mb||0)/1024).toFixed(1)+' GB</b></div><div class="kv"><span>Speed</span><b>'+(n.mbps||0)+' Mbps</b></div><div class="kv"><span>Bot process</span><b>'+Math.round(n.bot_rss_mb||0)+' MB</b></div><div class="kv"><span>Disk</span><b>'+(n.disk_used_gb||0)+' / '+Math.round(n.disk_total_gb||0)+' GB</b></div>')}
+    if(d.now){var n=d.now;h+=card('⚡ Right now','<div class="grid3"><div class="mini"><b>'+Math.round(n.cpu)+'%</b><span>CPU</span></div><div class="mini"><b>'+Math.round(n.ram)+'%</b><span>RAM</span></div><div class="mini"><b>'+(n.mbps||0).toFixed(1)+'</b><span>Mbps</span></div></div><div class="kv"><span>RAM</span><b>'+((n.ram_used_mb||0)/1024).toFixed(1)+' / '+((n.ram_total_mb||0)/1024).toFixed(1)+' GB</b></div><div class="kv"><span>Speed</span><b>'+(n.mbps||0)+' Mbps</b></div><div class="kv"><span>Bot process</span><b>'+Math.round(n.bot_rss_mb||0)+' MB</b></div><div class="kv"><span>Disk</span><b>'+(n.disk_used_gb||0)+' / '+Math.round(n.disk_total_gb||0)+' GB</b></div>')}
     if(!d.has_data)h+=card('📊 History','<div class="empty">No data yet. The bot saves a sample every 5 minutes — check again soon.</div>');
     else{
       var r=d.rows,L=[['Today',r.today],['7 days',r.d7],['30 days',r.d30]];

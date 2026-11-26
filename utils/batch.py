@@ -247,7 +247,7 @@ async def _process(bot, b: dict):
                 continue
             stored.append(await AP._store(bot, channel["id"], f, db.make_code(vtoken, i), by))
             await _set(bid, stored=stored)
-        await db.create_link(stored, by, (b["name"] or "Folder")[:40] + " (videos)", token=vtoken)
+        await db.create_link(stored, by, (b["name"] or "Folder")[:40] + " (videos)", token=vtoken, chan=cid)
         await _set(bid, link_done=True)
 
     # 2) thumbnails (captioned photos) -> saved in the Database Channel, so the post can always be rebuilt

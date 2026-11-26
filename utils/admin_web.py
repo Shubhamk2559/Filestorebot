@@ -37,7 +37,7 @@ _tasks: set = set()
 OPEN_ACTIONS = {
     "batch": "📦 Create Batch", "links": "🔗 My Links", "dbch": "📡 Database Channel", "fsub": "🔔 Force-Sub",
     "btns": "🔘 Join Buttons", "ban": "🚫 Ban / Unban", "admins": "👮 Admins", "simg": "🖼 Start Image",
-    "scap": "📝 Start Caption", "fcap": "🏷 File Caption", "mode": "🎬 Delivery Mode", "reset": "♻️ Reset Settings",
+    "scap": "📝 Start Caption", "fcap": "🏷 File Caption", "reset": "♻️ Reset Settings",
     "tr": "🔄 Transfer", "bk": "💾 Backup / Restore", "ap": "📅 Autoposter", "bc": "📢 Broadcast",
 }
 OWNER_OPS = {"earnings", "backup", "backup_now", "backup_auto", "transfer", "vps", "admins"}
@@ -317,7 +317,7 @@ async def op_vps(uid, b, bot):
     now = U.last
     if now:
         out["now"] = {k: (round(now[k], 1) if isinstance(now[k], float) else now[k])
-                      for k in ("cpu", "ram", "ram_used_mb", "ram_total_mb", "mbps", "streams", "bot_rss_mb",
+                      for k in ("cpu", "ram", "ram_used_mb", "ram_total_mb", "mbps", "bot_rss_mb",
                                 "disk_used_gb", "disk_total_gb") if k in now}
     if docs:
         today = [d for d in docs if d["_id"][:10] == t.isoformat()]
