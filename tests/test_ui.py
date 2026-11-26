@@ -190,7 +190,7 @@ def static_menus():
     check(K.ub("a b", "x").text == "A B", "ub() must upper-case")
     check(K.grid([("a", "1"), ("b", "2"), ("c", "3")])[1][0].text == "C", "grid leftover")
     check(K.pager(0, 1, "p") == [] and len(K.pager(1, 3, "p")) == 2, "pager")
-    check(ui.head("⚙️", "Admin Control Panel", "X") == "⚙️ <b>ADMIN CONTROL PANEL</b>\n\nX", "head()")
+    check(ui.head("⚙️", "Admin Control Panel", "X") == "⚙️ <b>ADMIN CONTROL PANEL</b>\n\n<blockquote>𝗫</blockquote>", "head()")
     check(ui.ago(None) == "NEVER" and ui.ago(__import__("time").time() - 7200) == "2 H AGO", "ago()")
     check(ui.bar(50, 10) == "█████░░░░░", "bar()")
 
