@@ -3,14 +3,16 @@ handlers/autoposter.py
 Autoposter screens of the admin panel (registered into handlers.admin's ACTIONS / STATES).
 
   Panel -> 📅 Autoposter -> channel list -> pick a channel:
-      ⏰ Timings        several times a day, posts per time (each time has its own count)
-      📚 All Posts      every post of this channel (✅ posted / ⏳ pending), open one -> Post now / Delete
-      ➕ Create Post    (a) range: first + last message of a source channel  (b) send / forward files, then Done
-      🔄 Post Type      Classic (caption file = thumbnail + files below) / Image + Video (image 1, video 1, image 2 ...)
-      🗂 Queue          shuffled order of the posts (cycle, cursor, up next)
-      🔀 Reshuffle      new random order, all posts pending again
-      🔁 Mode           loop (reshuffle every cycle) / one pass (stop after every post is posted once)
-      ▶️ ON / OFF, 🗑 remove channel
+      ⏰ TIMINGS      times of the day + posts per time
+      📚 ALL POSTS    every post (✅ posted / ⏳ pending), open one -> Post now / Delete
+      ➕ CREATE POST  range (first + last message) or send / forward files
+      🎨 CAPTION      fixed caption, buttons, thumbnail, imgbb keys, spacing ...
+      🎭 POST TYPE    🔥 SOLO DROP / 💎 DUO REEL / 👑 VAULT PACK
+      🗂 QUEUE        order of the posts          🔀 RESHUFFLE   new random order
+      🔁 MODE         loop / one pass             ⏸ / ▶️         turn the channel OFF / ON
+
+Style: same as the Admin Control Panel - CAPS bold header, one short line, CAPS buttons in a 2-column grid.
+Details (timings, counts, order) live only on the screen that owns them.
 """
 import html
 import logging
@@ -21,16 +23,29 @@ from telegram import InlineKeyboardMarkup as M
 
 from database import db
 from database.db import settings as S
-from handlers.admin import B, PAGE, action, ask, ask_chat, resolve_channel, show, state
+from handlers.admin import B, PAGE, _ago, action, ask, ask_chat, resolve_channel, show, state
 from handlers.upload import media_info
 from utils import autoposter as AP
 from utils import batch as BT
 from utils import keyboards as K
+from utils.keyboards import ub as U
 from utils.links import share_link
 from utils.streamer import streamer
 
 log = logging.getLogger(__name__)
 MAX_RANGE = 10000
+
+# the three post types (stored values: classic / pair / batch)
+TYPES = {"classic": "🔥 SOLO DROP", "pair": "💎 DUO REEL", "batch": "👑 VAULT PACK"}
+NEXT_TYPE = {"classic": "pair", "pair": "batch", "batch": "classic"}
+
+
+def _type(ch: dict) -> str:
+    return TYPES.get(ch.get("ptype") or "classic", TYPES["classic"])
+
+
+def _gone(update):
+    return show(update, "⚠️ CHANNEL NOT FOUND.", K.back("ap"))
 
 
 async def _job(coro, bot, chat_id):
@@ -39,7 +54,7 @@ async def _job(coro, bot, chat_id):
     except Exception as e:  # never let a background job die silently
         log.exception("Autoposter job failed")
         try:
-            await bot.send_message(chat_id, f"⚠️ Create Post failed: <code>{html.escape(str(e))}</code>")
+            await bot.send_message(chat_id, f"⚠️ CREATE POST FAILED: <code>{html.escape(str(e))}</code>")
         except Exception:
             pass
 
@@ -48,21 +63,19 @@ async def _job(coro, bot, chat_id):
 @action("ap")
 async def a_ap(update, context, args):
     chans = await db.ap_list_channels()
-    rows = [[B(f"📺 {c['title'][:30]}", f"adm:apc:{c['_id']}")] for c in chans]
-    rows.append([B("➕ Add Channel / Group", "adm:apadd")])
-    rows.append([B("🔙 Back", "adm:home")])
+    rows = [[B(f"📺 {c['title'][:30]}", f"adm:apc:{c['_id']}")] for c in chans]   # channel names keep their own font
+    rows.append([U("➕ Add Channel", "adm:apadd")])
+    rows.append([U("🔙 Back", "adm:home")])
     await show(update,
-               "📅 <b>Autoposter</b>\n\nAdd a channel or group, set the timings and the bot posts "
-               "your saved posts there automatically.\n\n"
-               + (f"{len(chans)} channel(s) added." if chans else "No channel added yet."),
+               "📅 <b>AUTOPOSTER</b>\n\n"
+               + ("SELECT A CHANNEL OR ADD A NEW ONE." if chans else "NO CHANNEL ADDED YET."),
                M(rows))
 
 
 @action("apadd")
 async def a_apadd(update, context, args):
     await ask_chat(update, context, "ap_add",
-                   "➕ <b>Add Channel / Group</b>\n\nChoose where the bot should post.\n"
-                   "If the bot is not an admin there, Telegram will offer to add it.",
+                   "➕ <b>ADD CHANNEL</b>\n\nCHOOSE WHERE THE BOT SHOULD POST.",
                    channel=True, group=True)
 
 
@@ -74,49 +87,28 @@ async def st_ap_add(update, context):
     await db.ap_add_channel(chat.id, chat.title or str(chat.id))
     context.user_data.pop("state", None)
     await update.effective_message.reply_text(
-        f"✅ Added <b>{html.escape(chat.title or '')}</b>.",
-        reply_markup=M([[B("📺 Open", f"adm:apc:{chat.id}")], [B("🔙 Back", "adm:ap")]]))
+        f"✅ ADDED <b>{html.escape(chat.title or '')}</b>.",
+        reply_markup=M([[U("📺 Open", f"adm:apc:{chat.id}"), U("🔙 Back", "adm:ap")]]))
 
 
 # ===================================================================== one channel
-def _type_name(ch: dict) -> str:
-    return {"pair": "🖼+🎬 Image + Video", "batch": "📂 Folder Batch"}.get(ch.get("ptype"), "🎞 Classic (thumbnail + files)")
-
-
-def _type_short(ch: dict) -> str:
-    return {"pair": "🖼+🎬 Image + Video", "batch": "📂 Folder Batch"}.get(ch.get("ptype"), "🎞 Classic")
-
-
 async def show_channel(update, cid: int, note: str = ""):
     ch = await db.ap_get_channel(cid)
     if not ch:
-        await show(update, "⚠️ Channel not found.", K.back("ap"))
+        await _gone(update)
         return
-    total, posted = await db.ap_counts(cid)
     on = ch.get("enabled", True)
-    loop = ch.get("loop", True)
-    batch_line = ""
-    if ch.get("ptype") == "batch":
-        todo, done = await BT.counts(cid)
-        batch_line = (f"\n📂 Folders: <b>{done}</b> ready" + (f" · <b>{todo}</b> preparing" if todo else "")
-                      + f"\n🔢 Last post no.: <b>{ch.get('post_no', 0)}</b>")
-    text = (f"{note}📺 <b>{html.escape(ch['title'])}</b>\n\n"
-            f"▫️ Status: <b>{'ON ✅' if on else 'OFF ⏸'}</b>\n"
-            f"▫️ Timings (IST): <b>{AP.fmt_slots(ch.get('slots', []))}</b>\n"
-            f"▫️ Type: <b>{_type_name(ch)}</b>\n"
-            f"▫️ Mode: <b>{'🔁 loop' if loop else '➡️ one pass'}</b> · cycle <b>{(ch.get('queue_state') or {}).get('cycle', 0)}</b>\n"
-            f"▫️ Posts: <b>{total}</b> total · <b>{posted}</b> posted · <b>{total - posted}</b> pending{batch_line}")
-    await show(update, text, M([
-        [B("⏰ Timings", f"adm:aptm:{cid}"), B(f"📚 All Posts ({total})", f"adm:apall:{cid}:0")],
-        [B("➕ Create Post", f"adm:apnew:{cid}"), B("🎨 Caption & Button", f"adm:apcb:{cid}")],
-        [B(f"🔄 Post Type: {_type_short(ch)}", f"adm:aptype:{cid}")],
-        [B("🗂 Queue", f"adm:apq:{cid}"), B("🔀 Reshuffle", f"adm:apresh:{cid}")],
-        [B(f"🔁 Mode: {'loop' if loop else 'one pass'}", f"adm:apmode:{cid}"),
-         B("⏸ Turn OFF" if on else "▶️ Turn ON", f"adm:apon:{cid}")],
-        [B("🧹 Wipe posts", f"adm:apwipe:{cid}")],
-        [B("🗑 Remove channel", f"adm:aprm:{cid}")],
-        [B("🔙 Back", "adm:ap")],
-    ]))
+    await show(update,
+               f"{note}📺 <b>{html.escape(ch['title'])}</b>\n\nSELECT AN OPTION TO MANAGE THIS CHANNEL.",
+               M([
+                   [U("⏰ Timings", f"adm:aptm:{cid}"), U("📚 All Posts", f"adm:apall:{cid}:0")],
+                   [U("➕ Create Post", f"adm:apnew:{cid}"), U("🎨 Caption", f"adm:apcb:{cid}")],
+                   [U("🎭 Post Type", f"adm:aptype:{cid}")],
+                   [U("🗂 Queue", f"adm:apq:{cid}"), U("🔀 Reshuffle", f"adm:apresh:{cid}")],
+                   [U("🔁 Mode", f"adm:apmode:{cid}"), U("⏸ Turn OFF" if on else "▶️ Turn ON", f"adm:apon:{cid}")],
+                   [U("🧹 Wipe", f"adm:apwipe:{cid}"), U("🗑 Remove", f"adm:aprm:{cid}")],
+                   [U("🔙 Back", "adm:ap")],
+               ]))
 
 
 @action("apc")
@@ -128,9 +120,10 @@ async def a_apc(update, context, args):
 async def a_apon(update, context, args):
     cid = int(args[0])
     ch = await db.ap_get_channel(cid)
+    on = not (ch or {}).get("enabled", True)
     if ch:
-        await db.ap_set(cid, enabled=not ch.get("enabled", True))
-    await show_channel(update, cid, "✅ Updated.\n\n")
+        await db.ap_set(cid, enabled=on)
+    await show_channel(update, cid, f"{'✅ AUTOPOSTER ON' if on else '⏸ AUTOPOSTER OFF'}.\n\n")
 
 
 @action("aptype")
@@ -138,29 +131,19 @@ async def a_aptype(update, context, args):
     cid = int(args[0])
     ch = await db.ap_get_channel(cid)
     if ch:
-        nxt = {"classic": "pair", "pair": "batch"}.get(ch.get("ptype") or "classic", "classic")
-        await db.ap_set(cid, ptype=nxt)
-    ch = await db.ap_get_channel(cid) or {}
-    t = ch.get("ptype")
-    await show_channel(update, cid,
-                       ("🖼+🎬 <b>Image + Video</b>\n"
-                        "Files in order: image, video, image, video…\n"
-                        "Each pair = 1 post · image = free preview · video = after ad.\n\n"
-                        if t == "pair" else
-                        "📂 <b>Folder Batch</b>\n"
-                        "Text with “Uploaded” closes a folder · files above it = 1 folder.\n"
-                        "Photos → Telegraph link · other files → file link.\n\n"
-                        if t == "batch" else
-                        "🎞 <b>Classic</b>\n"
-                        "Captioned file = thumbnail · captionless files below = post files.\n\n"))
+        await db.ap_set(cid, ptype=NEXT_TYPE.get(ch.get("ptype") or "classic", "classic"))
+    await show_channel(update, cid, f"✅ POST TYPE: <b>{_type(await db.ap_get_channel(cid) or {})}</b>\n\n")
 
 
+# ---------------------------------------------------------------------- queue
 async def show_queue(update, cid: int, note: str = ""):
     ch = await db.ap_get_channel(cid)
     if not ch:
-        await show(update, "⚠️ Channel not found.", K.back("ap"))
+        await _gone(update)
         return
     total, posted = await db.ap_counts(cid)
+    qs = ch.get("queue_state") or {}
+    head = f"{note}🗂 <b>QUEUE</b> — {html.escape(ch['title'])}\n\n"
     if ch.get("ptype") == "batch":
         now = time.time()
         pend = await db.ap_posts_col.find({"chan": cid, "posted": False, "ptype": "batch"}).sort("not_before", 1).to_list(None)
@@ -168,36 +151,31 @@ async def show_queue(update, cid: int, note: str = ""):
         wait = [p for p in pend if float(p.get("not_before") or 0) > now]
         todo, _ = await BT.counts(cid)
         gap, min_h = BT.settings_of(ch)
-        lines = [f"• #{p['seq']} {html.escape(p['title'][:26])} — in {max(1, int((p['not_before'] - now) // 86400))} d"
+        lines = [f"• #{p['seq']} {html.escape(p['title'][:26])} — IN {max(1, int((p['not_before'] - now) // 86400))} D"
                  for p in wait[:8]]
         await show(update,
-                   f"{note}🗂 <b>Queue</b> — {html.escape(ch['title'])}\n\n"
-                   f"▫️ Posted: <b>{posted}</b> · Ready: <b>{len(ready)}</b> · Waiting: <b>{len(wait)}</b>\n"
-                   f"▫️ Preparing: <b>{todo}</b> folders\n"
-                   f"▫️ Last post no.: <b>{ch.get('post_no', 0)}</b>\n"
-                   f"▫️ Gap: <b>{gap}</b> d (+0-{BT.GAP_JITTER_DAYS}) · <b>{min_h:g}</b> h between posts\n"
-                   f"▫️ Last posted: <b>{_ago((ch.get('queue_state') or {}).get('last_posted_at'))}</b>\n\n"
-                   f"<b>Waiting</b>\n" + ("\n".join(lines) if lines else "<i>none</i>"),
-                   M([[B("🔄 Refresh", f"adm:apq:{cid}")], [B("🔙 Back", f"adm:apc:{cid}")]]))
+                   head
+                   + f"✅ POSTED: <b>{posted}</b> · READY: <b>{len(ready)}</b> · WAITING: <b>{len(wait)}</b>\n"
+                   f"⚙️ PREPARING: <b>{todo}</b> FOLDERS\n"
+                   f"📆 GAP: <b>{gap}</b> D · <b>{min_h:g}</b> H\n"
+                   f"🕓 LAST POSTED: <b>{_ago(qs.get('last_posted_at')).upper()}</b>\n\n"
+                   "<b>WAITING</b>\n" + ("\n".join(lines) if lines else "<i>NONE</i>"),
+                   M([[U("🔄 Refresh", f"adm:apq:{cid}")], [U("🔙 Back", f"adm:apc:{cid}")]]))
         return
-    qs = ch.get("queue_state") or {}
-    queue, cursor = qs.get("queue") or [], int(qs.get("cursor", 0))
     nxt = AP.next_slot(ch.get("slots", []))
-    batch = int(nxt[1]["n"]) if nxt else 1
+    n = int(nxt[1]["n"]) if nxt else 1
     up = await db.ap_upcoming(cid, 10)
-    lines = [f"{'▶️' if i < batch else '•'} #{p['seq']} {html.escape(p['title'][:30])}" for i, p in enumerate(up)]
-    when = (f"{nxt[0].strftime('%H:%M')} IST ×{nxt[1]['n']}" if nxt else "no timing set")
+    lines = [f"{'▶️' if i < n else '•'} #{p['seq']} {html.escape(p['title'][:30])}" for i, p in enumerate(up)]
+    when = f"{nxt[0].strftime('%H:%M')} IST ×{nxt[1]['n']}" if nxt else "NO TIMING SET"
     await show(update,
-               f"{note}🗂 <b>Queue</b> — {html.escape(ch['title'])}\n\n"
-               f"▫️ Remaining: <b>{total - posted}</b> · Posted: <b>{posted}</b>\n"
-               f"▫️ Cycle: <b>{qs.get('cycle', 0)}</b> · Cursor: <b>{cursor}/{len(queue)}</b>\n"
-               f"▫️ Mode: <b>{'🔁 loop' if ch.get('loop', True) else '➡️ one pass'}</b>\n"
-               f"▫️ Last posted: <b>{_ago(qs.get('last_posted_at'))}</b>\n"
-               f"▫️ Next: <b>{when}</b>\n\n"
-               f"<b>Up next</b> (▶️ = next slot)\n"
-               + ("\n".join(lines) if lines else "<i>empty</i>"),
-               M([[B("🔀 Reshuffle", f"adm:apresh:{cid}"), B("🔄 Refresh", f"adm:apq:{cid}")],
-                  [B("🔙 Back", f"adm:apc:{cid}")]]))
+               head
+               + f"⏳ PENDING: <b>{total - posted}</b> · ✅ POSTED: <b>{posted}</b>\n"
+               f"🔁 CYCLE: <b>{qs.get('cycle', 0)}</b> · {'LOOP' if ch.get('loop', True) else 'ONE PASS'}\n"
+               f"🕘 NEXT: <b>{when}</b>\n"
+               f"🕓 LAST POSTED: <b>{_ago(qs.get('last_posted_at')).upper()}</b>\n\n"
+               "<b>UP NEXT</b>\n" + ("\n".join(lines) if lines else "<i>EMPTY</i>"),
+               M([[U("🔀 Reshuffle", f"adm:apresh:{cid}"), U("🔄 Refresh", f"adm:apq:{cid}")],
+                  [U("🔙 Back", f"adm:apc:{cid}")]]))
 
 
 @action("apq")
@@ -209,7 +187,7 @@ async def a_apq(update, context, args):
 async def a_apresh(update, context, args):
     cid = int(args[0])
     await db.ap_rebuild_cycle(cid)
-    await show_queue(update, cid, "🔀 Queue reshuffled.\n\n")
+    await show_queue(update, cid, "🔀 QUEUE RESHUFFLED.\n\n")
 
 
 @action("apmode")
@@ -218,55 +196,53 @@ async def a_apmode(update, context, args):
     ch = await db.ap_get_channel(cid)
     if ch:
         await db.ap_set(cid, loop=not ch.get("loop", True))
-    ch = await db.ap_get_channel(cid) or {}
+    loop = (await db.ap_get_channel(cid) or {}).get("loop", True)
     await show_channel(update, cid,
-                       ("🔁 Loop: when every post is posted, the queue is reshuffled and starts again.\n\n"
-                        if ch.get("loop", True) else
-                        "➡️ One pass: the Autoposter turns OFF after every post is posted once.\n\n"))
+                       "🔁 <b>MODE: LOOP</b>\nRESHUFFLES AND STARTS AGAIN AFTER THE LAST POST.\n\n" if loop else
+                       "➡️ <b>MODE: ONE PASS</b>\nTURNS OFF AFTER EVERY POST IS POSTED ONCE.\n\n")
 
 
 @action("aprm")
 async def a_aprm(update, context, args):
     cid = int(args[0])
     await show(update,
-               "🗑 <b>Remove this channel from Autoposter?</b>\n\nIts post list is deleted from the Autoposter. "
-               "Share links and the files in the Database Channel stay.",
-               M([[B("✅ Yes, remove", f"adm:aprmyes:{cid}")], [B("❌ No", f"adm:apc:{cid}")]]))
+               "🗑 <b>REMOVE THIS CHANNEL?</b>\n\nSHARE LINKS AND FILES STAY SAFE.",
+               M([[U("✅ Yes, Remove", f"adm:aprmyes:{cid}"), U("❌ No", f"adm:apc:{cid}")]]))
 
 
 @action("aprmyes")
 async def a_aprmyes(update, context, args):
     await db.ap_remove_channel(int(args[0]))
-    await show(update, "🗑 Channel removed.", K.back("ap"))
+    await show(update, "🗑 CHANNEL REMOVED.", K.back("ap"))
 
 
-# ===================================================================== caption & button
+# ===================================================================== caption
 async def show_cb(update, cid: int, note: str = ""):
     ch = await db.ap_get_channel(cid)
     if not ch:
-        await show(update, "⚠️ Channel not found.", K.back("ap"))
+        await _gone(update)
         return
     tpl = (ch.get("cap_tpl") or "").replace("{caption}", "").strip()
     btn = ch.get("btn") or AP.DEFAULT_BTN
     await show(update,
-               f"{note}🎨 <b>Caption &amp; Button</b> — {html.escape(ch['title'])}\n\n"
-               f"📝 Caption: {tpl or '<i>not set</i>'}\n"
-               f"🔘 Button: <b>{html.escape(btn)}</b>\n"
-               f"🖼 Thumbnail: <b>{'set ✅' if ch.get('fthumb') else 'not set ⚠️'}</b>\n\n"
-               f"<b>Image + Video</b>\n"
-               f"🔘 Buttons: <b>{html.escape(ch.get('btn_img') or AP.DEFAULT_BTN_IMG)}</b> · "
+               f"{note}🎨 <b>CAPTION &amp; BUTTON</b> — {html.escape(ch['title'])}\n\n"
+               f"📝 CAPTION: {tpl or '<i>NOT SET</i>'}\n"
+               f"🔘 BUTTON: <b>{html.escape(btn)}</b>\n"
+               f"🖼 THUMBNAIL: <b>{'SET ✅' if ch.get('fthumb') else 'NOT SET ⚠️'}</b>\n\n"
+               f"<b>{TYPES['pair']}</b>\n"
+               f"🔘 <b>{html.escape(ch.get('btn_img') or AP.DEFAULT_BTN_IMG)}</b> · "
                f"<b>{html.escape(ch.get('btn_vid') or AP.DEFAULT_BTN_VID)}</b>\n\n"
-               f"<b>Folder Batch</b>\n"
-               f"🌐 imgbb keys: <b>{len(BT.keys()) or 'none'}</b>\n"
-               f"📰 Telegraph title: <code>{html.escape(ch.get('tg_title') or BT.DEFAULT_TG_TITLE)}</code>\n"
-               f"🔢 Last post no.: <b>{ch.get('post_no', 0)}</b>\n"
-               "🏷 Tags: <code>{Preview Image}</code> <code>{Video Link}</code> <code>{Post Number}</code>",
-               M([[B("📝 Edit Caption", f"adm:apcap:{cid}"), B("🔘 Edit Button", f"adm:apbtn:{cid}")],
-                  [B("🖼 Fixed Thumbnail", f"adm:apthumb:{cid}"), B("🔘 Pair Buttons", f"adm:appbtn:{cid}")],
-                  [B("🌐 imgbb API Keys", f"adm:apimg:{cid}"), B("📰 Telegraph Title", f"adm:aptgt:{cid}")],
-                  [B("🔢 Post Number", f"adm:appno:{cid}"), B("📆 Spacing", f"adm:apgap:{cid}")],
-                  [B("♻️ Reset to default", f"adm:apcbr:{cid}")],
-                  [B("🔙 Back", f"adm:apc:{cid}")]]))
+               f"<b>{TYPES['batch']}</b>\n"
+               f"🌐 IMGBB KEYS: <b>{len(BT.keys()) or 'NONE'}</b>\n"
+               f"📰 TELEGRAPH: <code>{html.escape(ch.get('tg_title') or BT.DEFAULT_TG_TITLE)}</code>\n"
+               f"🔢 LAST POST NO: <b>{ch.get('post_no', 0)}</b>\n"
+               "🏷 TAGS: <code>{Preview Image}</code> <code>{Video Link}</code> <code>{Post Number}</code>",
+               M([[U("📝 Caption", f"adm:apcap:{cid}"), U("🔘 Button", f"adm:apbtn:{cid}")],
+                  [U("🖼 Thumbnail", f"adm:apthumb:{cid}"), U("🎬 Duo Buttons", f"adm:appbtn:{cid}")],
+                  [U("🌐 Imgbb Keys", f"adm:apimg:{cid}"), U("📰 TG Title", f"adm:aptgt:{cid}")],
+                  [U("🔢 Post No", f"adm:appno:{cid}"), U("📆 Spacing", f"adm:apgap:{cid}")],
+                  [U("♻️ Reset", f"adm:apcbr:{cid}")],
+                  [U("🔙 Back", f"adm:apc:{cid}")]]))
 
 
 @action("apcb")
@@ -278,16 +254,19 @@ async def a_apcb(update, context, args):
 async def a_apcbr(update, context, args):
     cid = int(args[0])
     await db.ap_set(cid, cap_tpl="", btn="", btn_img="", btn_vid="", fthumb="")
-    await show_cb(update, cid, "♻️ Reset.\n\n")
+    await show_cb(update, cid, "♻️ RESET DONE.\n\n")
+
+
+async def _saved(msg, cid: int, text: str):
+    await msg.reply_text(text, reply_markup=K.back(f"apcb:{cid}"))
 
 
 @action("apcap")
 async def a_apcap(update, context, args):
     context.user_data["ap_cid"] = int(args[0])
     await ask(update, context, "ap_cap",
-              "📝 <b>Fixed post caption</b>\n\nSend the full caption once (bold / italic / links work).\n"
-              "Every post of this channel will get exactly this text - nothing else is added.\n"
-              "Send <code>-</code> to remove it (then each post uses its own caption).")
+              "📝 <b>FIXED CAPTION</b>\n\nSEND THE CAPTION ONCE. EVERY POST OF THIS CHANNEL GETS THIS TEXT.\n"
+              "SEND <code>-</code> TO REMOVE IT.")
 
 
 @state("ap_cap")
@@ -295,24 +274,23 @@ async def st_ap_cap(update, context):
     msg = update.effective_message
     cid = context.user_data.get("ap_cid")
     if not msg.text or cid is None:
-        await msg.reply_text("⚠️ Send the caption as text.", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ SEND THE CAPTION AS TEXT.", reply_markup=K.cancel())
         return
     tpl = "" if msg.text.strip() == "-" else msg.text_html.strip()
     if AP._plain_len(tpl) > AP.CAPTION_MAX:
-        await msg.reply_text("⚠️ Too long (Telegram caption limit is 1024).", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ TOO LONG (MAX 1024).", reply_markup=K.cancel())
         return
     await db.ap_set(cid, cap_tpl=tpl)
     context.user_data.pop("state", None)
-    await msg.reply_text("✅ Caption saved.", reply_markup=K.back(f"apcb:{cid}"))
+    await _saved(msg, cid, "✅ CAPTION SAVED.")
 
 
 @action("apbtn")
 async def a_apbtn(update, context, args):
     context.user_data["ap_cid"] = int(args[0])
     await ask(update, context, "ap_btn",
-              f"🔘 <b>Button text</b>\n\nSend the text for the button under every post "
-              f"(max {AP.BTN_MAX} characters, emoji ok), e.g. <code>⬇️ Download Now</code>\n"
-              f"Send <code>-</code> for the default ({AP.DEFAULT_BTN}).")
+              f"🔘 <b>BUTTON TEXT</b>\n\nSEND THE TEXT FOR THE BUTTON UNDER EVERY POST (MAX {AP.BTN_MAX} CHARS).\n"
+              f"EXAMPLE: <code>⬇️ Download Now</code>\nSEND <code>-</code> FOR DEFAULT.")
 
 
 @state("ap_btn")
@@ -321,25 +299,23 @@ async def st_ap_btn(update, context):
     cid = context.user_data.get("ap_cid")
     txt = (msg.text or "").strip()
     if not txt or cid is None or len(txt) > AP.BTN_MAX:
-        await msg.reply_text(f"⚠️ Send text up to {AP.BTN_MAX} characters.", reply_markup=K.cancel())
+        await msg.reply_text(f"⚠️ SEND TEXT UP TO {AP.BTN_MAX} CHARS.", reply_markup=K.cancel())
         return
     await db.ap_set(cid, btn="" if txt == "-" else txt)
     context.user_data.pop("state", None)
-    await msg.reply_text("✅ Button saved.", reply_markup=K.back(f"apcb:{cid}"))
+    await _saved(msg, cid, "✅ BUTTON SAVED.")
 
 
 @action("apthumb")
 async def a_apthumb(update, context, args):
     cid = int(args[0])
     if not S.get("db_channel"):
-        await show(update, "⚠️ Set the Database Channel first.", M([[B("📡 Set Database Channel", "adm:dbch")]]))
+        await show(update, "⚠️ SET THE DATABASE CHANNEL FIRST.", M([[U("📡 Set Database Channel", "adm:dbch")]]))
         return
     context.user_data["ap_cid"] = cid
     await ask(update, context, "ap_thumb",
-              "🖼 <b>Fixed thumbnail</b> (Image + Video posts)\n\nSend ONE photo. Every Image + Video post of this channel "
-              "is posted with this picture (the buttons open the preview / video links).\n"
-              "It is saved in the Database Channel with a backup code.\n"
-              "Send <code>-</code> to remove it (Image + Video posts cannot be sent without it).")
+              f"🖼 <b>FIXED THUMBNAIL</b>\n\nSEND ONE PHOTO. IT IS USED FOR {TYPES['pair']} POSTS.\n"
+              "SEND <code>-</code> TO REMOVE IT.")
 
 
 @state("ap_thumb")
@@ -351,12 +327,12 @@ async def st_ap_thumb(update, context):
     if msg.text and msg.text.strip() == "-":
         await db.ap_set(cid, fthumb="")
         context.user_data.pop("state", None)
-        await msg.reply_text("✅ Fixed thumbnail removed.", reply_markup=K.back(f"apcb:{cid}"))
+        await _saved(msg, cid, "✅ THUMBNAIL REMOVED.")
         return
     kind, name = media_info(msg)
     channel = S.get("db_channel")
     if kind != "photo" or not channel:
-        await msg.reply_text("⚠️ Send one photo.", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ SEND ONE PHOTO.", reply_markup=K.cancel())
         return
     it = AP.item_from_ptb(msg, kind, name)
     it["cap"], it["cap_html"] = "", ""                 # only the backup code is written under it
@@ -364,21 +340,19 @@ async def st_ap_thumb(update, context):
     try:
         await AP._store(context.bot, channel["id"], it, db.make_code(token, 0), update.effective_user.id)
     except Exception as e:
-        await msg.reply_text(f"⚠️ Could not save it: <code>{html.escape(str(e))}</code>", reply_markup=K.cancel())
+        await msg.reply_text(f"⚠️ COULD NOT SAVE: <code>{html.escape(str(e))}</code>", reply_markup=K.cancel())
         return
     await db.ap_set(cid, fthumb=token)
     context.user_data.pop("state", None)
-    await msg.reply_text("✅ Fixed thumbnail saved.", reply_markup=K.back(f"apcb:{cid}"))
+    await _saved(msg, cid, "✅ THUMBNAIL SAVED.")
 
 
 @action("appbtn")
 async def a_appbtn(update, context, args):
     context.user_data["ap_cid"] = int(args[0])
     await ask(update, context, "ap_pbtn",
-              "🔘 <b>Image + Video buttons</b>\n\nSend two lines:\n"
-              f"line 1 = image (preview) button, line 2 = video button (max {AP.BTN_MAX} characters each)\n\n"
-              "<code>🖼 Preview</code>\n<code>🎬 Watch Video</code>\n\n"
-              "Send <code>-</code> for the defaults.")
+              f"🎬 <b>DUO BUTTONS</b>\n\nSEND TWO LINES, IMAGE BUTTON THEN VIDEO BUTTON (MAX {AP.BTN_MAX} CHARS EACH):\n"
+              "<code>🖼 Preview</code>\n<code>🎬 Watch Video</code>\n\nSEND <code>-</code> FOR DEFAULT.")
 
 
 @state("ap_pbtn")
@@ -387,32 +361,30 @@ async def st_ap_pbtn(update, context):
     cid = context.user_data.get("ap_cid")
     lines = [x.strip() for x in (msg.text or "").splitlines() if x.strip()]
     if cid is None or not lines:
-        await msg.reply_text("⚠️ Send two lines (or <code>-</code>).", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ SEND TWO LINES (OR <code>-</code>).", reply_markup=K.cancel())
         return
     if lines == ["-"]:
         img, vid = "", ""
     elif len(lines) == 2 and all(len(x) <= AP.BTN_MAX for x in lines):
         img, vid = lines
     else:
-        await msg.reply_text(f"⚠️ Two lines, up to {AP.BTN_MAX} characters each.", reply_markup=K.cancel())
+        await msg.reply_text(f"⚠️ TWO LINES, MAX {AP.BTN_MAX} CHARS EACH.", reply_markup=K.cancel())
         return
     await db.ap_set(cid, btn_img=img, btn_vid=vid)
     context.user_data.pop("state", None)
-    await msg.reply_text("✅ Buttons saved.", reply_markup=K.back(f"apcb:{cid}"))
+    await _saved(msg, cid, "✅ BUTTONS SAVED.")
 
 
+# ---------------------------------------------------------------------- imgbb keys
 async def show_keys(update, context, cid: int, note: str = ""):
     ks = BT.keys()
     rows = [[B(f"🔑 {BT.mask(k)} · {BT.key_state(k)}", "adm:noop"), B("❌", f"adm:apimgrm:{cid}:{i}")]
             for i, k in enumerate(ks)]
-    rows.append([B("➕ Add key", f"adm:apimgadd:{cid}")])
-    rows.append([B("🔙 Back", f"adm:apcb:{cid}")])
+    rows.append([U("➕ Add Key", f"adm:apimgadd:{cid}")])
+    rows.append([U("🔙 Back", f"adm:apcb:{cid}")])
     await show(update,
-               f"{note}🌐 <b>imgbb API keys</b>\n\n"
-               "Add one or more keys from <code>api.imgbb.com</code>. The bot uses them in rotation: when a key fails "
-               "or hits its limit it rests 30 min and the next key is used. Add new keys here any time.\n"
-               "Uploads are slow on purpose (5-15 s pause between two images).\n\n"
-               + (f"{len(ks)} key(s)." if ks else "No key yet."),
+               f"{note}🌐 <b>IMGBB KEYS</b>\n\n"
+               + (f"{len(ks)} KEY(S) · USED IN ROTATION." if ks else "NO KEY YET. GET ONE AT <code>api.imgbb.com</code>."),
                M(rows))
 
 
@@ -425,13 +397,13 @@ async def a_apimg(update, context, args):
 async def a_apimgadd(update, context, args):
     context.user_data["ap_cid"] = int(args[0])
     await ask(update, context, "ap_imgkey",
-              "🌐 <b>Add imgbb API key</b>\n\nSend the key. Your message is deleted right after it is saved.")
+              "🌐 <b>ADD IMGBB KEY</b>\n\nSEND THE KEY. YOUR MESSAGE IS DELETED AFTER SAVING.")
 
 
 @action("apimgrm")
 async def a_apimgrm(update, context, args):
     await BT.remove_key(int(args[1]))
-    await show_keys(update, context, int(args[0]), "🗑 Key removed.\n\n")
+    await show_keys(update, context, int(args[0]), "🗑 KEY REMOVED.\n\n")
 
 
 @state("ap_imgkey")
@@ -440,7 +412,7 @@ async def st_ap_imgkey(update, context):
     cid = context.user_data.get("ap_cid")
     txt = (msg.text or "").strip()
     if not txt or cid is None or " " in txt or len(txt) > 100:
-        await msg.reply_text("⚠️ Send just the API key (one word).", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ SEND JUST THE API KEY.", reply_markup=K.cancel())
         return
     await BT.add_key(txt)
     context.user_data.pop("state", None)
@@ -448,18 +420,19 @@ async def st_ap_imgkey(update, context):
         await msg.delete()                      # do not leave the key in the chat
     except Exception:
         pass
-    await context.bot.send_message(msg.chat_id, f"✅ Key saved ({len(BT.keys())} in total).",
+    await context.bot.send_message(msg.chat_id, f"✅ KEY SAVED ({len(BT.keys())} IN TOTAL).",
                                    reply_markup=K.back(f"apimg:{cid}"))
 
 
+# ---------------------------------------------------------------------- telegraph / post no / spacing
 @action("aptgt")
 async def a_aptgt(update, context, args):
     context.user_data["ap_cid"] = int(args[0])
     await ask(update, context, "ap_tgtitle",
-              "📰 <b>Telegraph article title</b> (Folder Batch)\n\nSend the title every new Telegraph article gets. "
-              "<code>{folder_name}</code> = the name of the folder (the text before “Uploaded”).\n"
-              "Example: <code>{folder_name} - Full Gallery</code>\n"
-              f"Send <code>-</code> for the default (<code>{BT.DEFAULT_TG_TITLE}</code>). Works for folders prepared from now on.")
+              f"📰 <b>TELEGRAPH TITLE</b> ({TYPES['batch']})\n\nSEND THE TITLE OF NEW ARTICLES. "
+              "<code>{folder_name}</code> = FOLDER NAME.\n"
+              "EXAMPLE: <code>{folder_name} - Full Gallery</code>\n"
+              f"SEND <code>-</code> FOR DEFAULT (<code>{BT.DEFAULT_TG_TITLE}</code>).")
 
 
 @state("ap_tgtitle")
@@ -467,11 +440,11 @@ async def st_ap_tgtitle(update, context):
     msg = update.effective_message
     cid, txt = context.user_data.get("ap_cid"), (msg.text or "").strip()
     if not txt or cid is None or len(txt) > 200:
-        await msg.reply_text("⚠️ Send the title as text (max 200 characters).", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ SEND THE TITLE AS TEXT (MAX 200 CHARS).", reply_markup=K.cancel())
         return
     await db.ap_set(cid, tg_title="" if txt == "-" else txt)
     context.user_data.pop("state", None)
-    await msg.reply_text("✅ Title saved.", reply_markup=K.back(f"apcb:{cid}"))
+    await _saved(msg, cid, "✅ TITLE SAVED.")
 
 
 @action("appno")
@@ -480,10 +453,9 @@ async def a_appno(update, context, args):
     ch = await db.ap_get_channel(cid) or {}
     context.user_data["ap_cid"] = cid
     await ask(update, context, "ap_postno",
-              f"🔢 <b>Post number</b>\n\nLast number used: <b>{ch.get('post_no', 0)}</b>\n"
-              "The number is given when a post goes out: last number + 1, in sequence, never repeated.\n\n"
-              "Send the number your channel is at now (e.g. <code>50</code> -> the next post becomes 51).\n"
-              "⚠️ Do not set it lower than the real last number, or numbers will repeat.")
+              f"🔢 <b>POST NUMBER</b>\n\nLAST NUMBER USED: <b>{ch.get('post_no', 0)}</b>\n"
+              "SEND THE NUMBER YOUR CHANNEL IS AT NOW (<code>50</code> → NEXT POST IS 51).\n"
+              "⚠️ DON'T SET IT LOWER THAN THE REAL LAST NUMBER.")
 
 
 @state("ap_postno")
@@ -491,12 +463,11 @@ async def st_ap_postno(update, context):
     msg = update.effective_message
     cid, txt = context.user_data.get("ap_cid"), (msg.text or "").strip()
     if cid is None or not txt.isdigit() or int(txt) > 10_000_000:
-        await msg.reply_text("⚠️ Send a whole number, e.g. <code>50</code>.", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ SEND A WHOLE NUMBER, E.G. <code>50</code>.", reply_markup=K.cancel())
         return
     await db.ap_set(cid, post_no=int(txt))
     context.user_data.pop("state", None)
-    await msg.reply_text(f"✅ Done. The next post gets number <b>{int(txt) + 1}</b>.",
-                         reply_markup=K.back(f"apcb:{cid}"))
+    await _saved(msg, cid, f"✅ DONE. NEXT POST NUMBER: <b>{int(txt) + 1}</b>.")
 
 
 @action("apgap")
@@ -506,9 +477,9 @@ async def a_apgap(update, context, args):
     gap, min_h = BT.settings_of(ch)
     context.user_data["ap_cid"] = cid
     await ask(update, context, "ap_gap",
-              f"📆 <b>Spacing</b> (Folder Batch)\n\nNow: same folder min <b>{gap}</b> days (+ random 0-{BT.GAP_JITTER_DAYS} days) · "
-              f"any two posts min <b>{min_h:g}</b> hours.\n\nSend two lines:\n"
-              f"<code>30</code>  (days between posts of the same folder)\n<code>3</code>  (hours between any two posts)")
+              f"📆 <b>SPACING</b> ({TYPES['batch']})\n\n"
+              f"NOW: <b>{gap}</b> DAYS (+0-{BT.GAP_JITTER_DAYS}) PER FOLDER · <b>{min_h:g}</b> HOURS BETWEEN POSTS.\n\n"
+              "SEND TWO NUMBERS:\n<code>30</code> DAYS\n<code>3</code> HOURS")
 
 
 @state("ap_gap")
@@ -520,32 +491,29 @@ async def st_ap_gap(update, context):
         if cid is None or not (1 <= a <= 365) or not (0 <= b <= 240):
             raise ValueError
     except ValueError:
-        await msg.reply_text("⚠️ Two numbers: days (1-365) and hours (0-240).", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ TWO NUMBERS: DAYS (1-365) AND HOURS (0-240).", reply_markup=K.cancel())
         return
     await db.ap_set(cid, gap_days=int(a), min_hours=b)
     context.user_data.pop("state", None)
-    await msg.reply_text(f"✅ Saved: {int(a)} days · {b:g} hours.", reply_markup=K.back(f"apcb:{cid}"))
+    await _saved(msg, cid, f"✅ SAVED: {int(a)} DAYS · {b:g} HOURS.")
 
 
 # ===================================================================== timings
 async def show_timings(update, cid: int, note: str = ""):
     ch = await db.ap_get_channel(cid)
     if not ch:
-        await show(update, "⚠️ Channel not found.", K.back("ap"))
+        await _gone(update)
         return
-    slots = sorted(ch.get("slots", []), key=lambda s: s["t"])
     rows = []
-    for s in slots:
+    for s in sorted(ch.get("slots", []), key=lambda s: s["t"]):
         k = s["t"].replace(":", "")       # ":" is the callback separator
         rows.append([B(f"🕘 {s['t']}", "adm:noop"), B("➖", f"adm:apsn:{cid}:{k}:m"),
                      B(str(s["n"]), "adm:noop"), B("➕", f"adm:apsn:{cid}:{k}:p"),
                      B("❌", f"adm:apsd:{cid}:{k}")])
-    rows.append([B("➕ Add Time", f"adm:apsadd:{cid}")])
-    rows.append([B("🔙 Back", f"adm:apc:{cid}")])
+    rows.append([U("➕ Add Time", f"adm:apsadd:{cid}")])
+    rows.append([U("🔙 Back", f"adm:apc:{cid}")])
     await show(update,
-               f"{note}⏰ <b>Timings</b> — {html.escape(ch['title'])}\n\n"
-               "Time is IST. Each row = a time and how many posts go out at that time.\n"
-               "➖ ➕ change the count, ❌ removes the time.",
+               f"{note}⏰ <b>TIMINGS</b> — {html.escape(ch['title'])}\n\nSET POST TIMES (IST).",
                M(rows))
 
 
@@ -575,17 +543,16 @@ async def a_apsd(update, context, args):
     cid, t = int(args[0]), _hhmm(args[1])
     ch = await db.ap_get_channel(cid)
     await db.ap_set(cid, slots=[s for s in (ch or {}).get("slots", []) if s["t"] != t])
-    await show_timings(update, cid, "✅ Time removed.\n\n")
+    await show_timings(update, cid, "✅ TIME REMOVED.\n\n")
 
 
 @action("apsadd")
 async def a_apsadd(update, context, args):
     context.user_data["ap_cid"] = int(args[0])
     await ask(update, context, "ap_slot",
-              "➕ <b>Add Time</b> (IST, 24-hour)\n\n"
-              "Send one or more lines: <code>HH:MM  posts</code>\n"
-              "<code>09:00 2</code>\n<code>14:30 1</code>\n<code>21:00 3</code>\n\n"
-              f"Posts is optional (default 1, max {AP.MAX_PER_SLOT}). Sending an existing time updates its count.")
+              "➕ <b>ADD TIME</b>\n\nSEND <code>HH:MM POSTS</code> (IST, 24H), ONE PER LINE:\n"
+              "<code>09:00 2</code>\n<code>14:30 1</code>\n\n"
+              f"POSTS IS OPTIONAL (DEFAULT 1, MAX {AP.MAX_PER_SLOT}).")
 
 
 @state("ap_slot")
@@ -595,7 +562,7 @@ async def st_ap_slot(update, context):
     try:
         new = AP.parse_slots(msg.text or "")
     except ValueError as e:
-        await msg.reply_text(f"⚠️ {html.escape(str(e))}\nExample: <code>09:00 2</code>", reply_markup=K.cancel())
+        await msg.reply_text(f"⚠️ {html.escape(str(e))}\nEXAMPLE: <code>09:00 2</code>", reply_markup=K.cancel())
         return
     ch = await db.ap_get_channel(cid)
     if not ch:
@@ -605,8 +572,7 @@ async def st_ap_slot(update, context):
     merged.update({s["t"]: s["n"] for s in new})
     await db.ap_set(cid, slots=[{"t": t, "n": n} for t, n in sorted(merged.items())])
     context.user_data.pop("state", None)
-    await msg.reply_text(f"✅ Saved. Timings: {AP.fmt_slots([{'t': t, 'n': n} for t, n in merged.items()])}",
-                         reply_markup=K.back(f"aptm:{cid}"))
+    await msg.reply_text("✅ TIMINGS SAVED.", reply_markup=K.back(f"aptm:{cid}"))
 
 
 # ===================================================================== all posts
@@ -615,47 +581,48 @@ async def a_apall(update, context, args):
     cid, page = int(args[0]), (int(args[1]) if len(args) > 1 else 0)
     total, posted = await db.ap_counts(cid)
     posts = await db.ap_list_posts(cid, page * PAGE, PAGE)
-    rows = [[B(f"{'✅' if p['posted'] else '⏳'} #{p['seq']} {p['title'][:24]} · {'🖼+🎬' if p.get('ptype') == 'pair' else '📂' if p.get('ptype') == 'batch' else p['n_files']}",
+    icon = {"pair": "💎", "batch": "👑"}
+    rows = [[B(f"{'✅' if p['posted'] else '⏳'} #{p['seq']} {p['title'][:24]} · {icon.get(p.get('ptype'), '🔥')}",
                f"adm:app:{p['_id']}")]
             for p in posts]
     nav = []
     if page > 0:
-        nav.append(B("⬅️ Prev", f"adm:apall:{cid}:{page - 1}"))
+        nav.append(U("⬅️ Prev", f"adm:apall:{cid}:{page - 1}"))
     if (page + 1) * PAGE < total:
-        nav.append(B("Next ➡️", f"adm:apall:{cid}:{page + 1}"))
+        nav.append(U("Next ➡️", f"adm:apall:{cid}:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([B("🔙 Back", f"adm:apc:{cid}")])
+    rows.append([U("🔙 Back", f"adm:apc:{cid}")])
     await show(update,
-               f"📚 <b>All Posts</b> ({total})\n✅ posted {posted} · ⏳ pending {total - posted}\n\n"
-               + ("Tap a post to open it." if total else "No posts yet. Use ➕ Create Post."),
+               f"📚 <b>ALL POSTS ({total})</b>\n✅ {posted} · ⏳ {total - posted}\n\n"
+               + ("TAP A POST TO OPEN IT." if total else "NO POSTS YET."),
                M(rows))
 
 
 async def show_post(update, bot, token: str, note: str = ""):
     p = await db.ap_get_post(token)
     if not p:
-        await show(update, "⚠️ Post not found.", K.back("ap"))
+        await show(update, "⚠️ POST NOT FOUND.", K.back("ap"))
         return
     if p.get("ptype") == "pair":
-        links = (f"🖼 Preview (free): <code>{share_link(bot.username, token)}</code>\n"
-                 f"🎬 Video (ad): <code>{share_link(bot.username, p['vtoken'])}</code>")
+        links = (f"🖼 PREVIEW (FREE): <code>{share_link(bot.username, token)}</code>\n"
+                 f"🎬 VIDEO (AD): <code>{share_link(bot.username, p['vtoken'])}</code>")
     elif p.get("ptype") == "batch":
-        links = (f"🖼 Preview: {p.get('tg_url') or '—'}\n"
-                 + (f"🎬 Videos: <code>{share_link(bot.username, p['vtoken'])}</code>\n" if p.get("vtoken") else "")
-                 + f"📂 Folder: {html.escape(p.get('batch_name') or '')}"
-                 + (f"\n🔢 Posted as #{p['posted_no']}" if p.get("posted_no") else "")
-                 + (f"\n🕓 Next possible: in {max(1, int((p['not_before'] - time.time()) // 86400))} d"
+        links = (f"🖼 PREVIEW: {p.get('tg_url') or '—'}\n"
+                 + (f"🎬 VIDEOS: <code>{share_link(bot.username, p['vtoken'])}</code>\n" if p.get("vtoken") else "")
+                 + f"📂 FOLDER: {html.escape(p.get('batch_name') or '')}"
+                 + (f"\n🔢 POSTED AS #{p['posted_no']}" if p.get("posted_no") else "")
+                 + (f"\n🕓 NEXT POSSIBLE: IN {max(1, int((p['not_before'] - time.time()) // 86400))} D"
                     if not p["posted"] and float(p.get("not_before") or 0) > time.time() else ""))
     else:
         links = f"🔗 <code>{share_link(bot.username, token)}</code>"
     await show(update,
-               f"{note}📝 <b>#{p['seq']}</b> · {'✅ posted' if p['posted'] else '⏳ pending'}"
-               f"{' · 🖼+🎬 Image + Video' if p.get('ptype') == 'pair' else ''}\n"
-               f"📁 Files: {p['n_files']}\n\n{html.escape(p['title'])}\n\n{links}",
-               M([[B("📤 Post now", f"adm:appnow:{token}")],
-                  [B("🗑 Delete post", f"adm:apdel:{token}:0"), B("🗑 Delete post + link", f"adm:apdel:{token}:1")],
-                  [B("🔙 Back", f"adm:apall:{p['chan']}:0")]]))
+               f"{note}📝 <b>#{p['seq']}</b> · {'✅ POSTED' if p['posted'] else '⏳ PENDING'} · "
+               f"{TYPES.get(p.get('ptype') or 'classic', TYPES['classic'])}\n"
+               f"📁 FILES: {p['n_files']}\n\n{html.escape(p['title'])}\n\n{links}",
+               M([[U("📤 Post Now", f"adm:appnow:{token}")],
+                  [U("🗑 Delete", f"adm:apdel:{token}:0"), U("🗑 Delete + Link", f"adm:apdel:{token}:1")],
+                  [U("🔙 Back", f"adm:apall:{p['chan']}:0")]]))
 
 
 @action("app")
@@ -667,10 +634,10 @@ async def a_app(update, context, args):
 async def a_appnow(update, context, args):
     p = await db.ap_get_post(args[0])
     if not p:
-        await show(update, "⚠️ Post not found.", K.back("ap"))
+        await show(update, "⚠️ POST NOT FOUND.", K.back("ap"))
         return
     err = await AP.send_post(context.bot, p["chan"], p)
-    await show_post(update, context.bot, args[0], "✅ Posted.\n\n" if not err else f"⚠️ <code>{html.escape(err)}</code>\n\n")
+    await show_post(update, context.bot, args[0], "✅ POSTED.\n\n" if not err else f"⚠️ <code>{html.escape(err)}</code>\n\n")
 
 
 @action("apdel")
@@ -682,8 +649,7 @@ async def a_apdel(update, context, args):
         for t in (db.post_tokens(p) if p else [args[0]]):
             await db.delete_link(t)
     await show(update,
-               "🗑 Post and its share link deleted." if with_link
-               else "🗑 Post deleted from the Autoposter (its share link still works).",
+               "🗑 POST AND LINK DELETED." if with_link else "🗑 POST DELETED. ITS LINK STILL WORKS.",
                K.back(f"apall:{p['chan']}:0" if p else "ap"))
 
 
@@ -692,20 +658,18 @@ async def a_apwipe(update, context, args):
     cid = int(args[0])
     total, posted = await db.ap_counts(cid)
     await show(update,
-               f"🧹 <b>Wipe posts</b>\n\n📚 {total} post(s) · ✅ posted {posted} · ⏳ pending {total - posted}\n\n"
-               "<b>Posts only</b>: posts leave the Autoposter, old share links keep working.\n"
-               "<b>Posts + links</b>: the share links are deleted too (files stay in the Database Channel).",
-               M([[B("🧹 Wipe ALL posts", f"adm:apwipey:{cid}:a0")],
-                  [B("🧹 Wipe ALL posts + links", f"adm:apwipey:{cid}:a1")],
-                  [B("✅ Wipe only posted ones", f"adm:apwipey:{cid}:p0")],
-                  [B("🔙 Back", f"adm:apc:{cid}")]]))
+               f"🧹 <b>WIPE POSTS</b>\n\n📚 {total} · ✅ {posted} · ⏳ {total - posted}\n\n"
+               "POSTS ONLY: OLD LINKS KEEP WORKING.\nPOSTS + LINKS: LINKS ARE DELETED TOO.",
+               M([[U("🧹 Wipe All", f"adm:apwipey:{cid}:a0"), U("🧹 Wipe All + Links", f"adm:apwipey:{cid}:a1")],
+                  [U("✅ Wipe Posted Only", f"adm:apwipey:{cid}:p0")],
+                  [U("🔙 Back", f"adm:apc:{cid}")]]))
 
 
 @action("apwipey")
 async def a_apwipey(update, context, args):
     cid, mode = int(args[0]), args[1]
     n = await db.ap_wipe(cid, only_posted=mode[0] == "p", links=mode[1] == "1")
-    await show_channel(update, cid, f"🧹 {n} post(s) deleted.\n\n")
+    await show_channel(update, cid, f"🧹 {n} POST(S) DELETED.\n\n")
 
 
 # ===================================================================== create post
@@ -713,34 +677,23 @@ async def a_apwipey(update, context, args):
 async def a_apnew(update, context, args):
     cid = int(args[0])
     if not S.get("db_channel"):
-        await show(update, "⚠️ Set the Database Channel first.", M([[B("📡 Set Database Channel", "adm:dbch")]]))
+        await show(update, "⚠️ SET THE DATABASE CHANNEL FIRST.", M([[U("📡 Set Database Channel", "adm:dbch")]]))
         return
     ch = await db.ap_get_channel(cid) or {}
-    if ch.get("ptype") == "batch":
-        await show(update,
-                   "➕ <b>Create Post</b> — 📂 Folder Batch\n\n"
-                   "1. Each folder ends with a text containing “Uploaded”.\n"
-                   "2. Send first + last message link of the range.\n"
-                   "3. Bot prepares everything in the background."
-                   + ("" if BT.enabled() else "\n\n⚠️ Add an imgbb key first (Caption & Button → imgbb API Keys).")
-                   + ("" if ch.get("cap_tpl") else "\n\n💡 Fixed caption not set."),
-                   M([[B("🔢 Range: first + last message", f"adm:aprange:{cid}")],
-                      [B("🔙 Back", f"adm:apc:{cid}")]]))
-        return
-    if ch.get("ptype") == "pair":
-        how = ("🖼+🎬 <b>Image + Video</b>\n\n"
-               "Files in order: image, video, image, video…\n"
-               "Each pair = 1 post (image free · video after ad).\n"
-               + ("" if ch.get("fthumb") else "\n⚠️ Set the Fixed Thumbnail first.\n"))
+    t = ch.get("ptype") or "classic"
+    if t == "batch":
+        how = ("SEND THE FIRST + LAST MESSAGE LINK OF THE RANGE.\nEACH FOLDER ENDS WITH A TEXT CONTAINING “UPLOADED”."
+               + ("" if BT.enabled() else "\n\n⚠️ ADD AN IMGBB KEY FIRST (CAPTION → IMGBB KEYS)."))
+        kb = M([[U("🔢 Range", f"adm:aprange:{cid}")], [U("🔙 Back", f"adm:apc:{cid}")]])
     else:
-        how = ("🎞 <b>Classic</b>\n\n"
-               "Captioned file = thumbnail.\n"
-               "Captionless files below it = post files.\n")
-    await show(update,
-               f"➕ <b>Create Post</b> — {how}",
-               M([[B("🔢 Range: first + last message", f"adm:aprange:{cid}")],
-                  [B("📥 Send / forward files, then Done", f"adm:apcollect:{cid}")],
-                  [B("🔙 Back", f"adm:apc:{cid}")]]))
+        if t == "pair":
+            how = ("SEND IMAGE, VIDEO, IMAGE, VIDEO… IN ORDER.\nEACH PAIR = 1 POST."
+                   + ("" if ch.get("fthumb") else "\n\n⚠️ SET THE FIXED THUMBNAIL FIRST."))
+        else:
+            how = "CAPTIONED FILE = THUMBNAIL.\nFILES BELOW IT = POST FILES."
+        kb = M([[U("🔢 Range", f"adm:aprange:{cid}"), U("📥 Send Files", f"adm:apcollect:{cid}")],
+                [U("🔙 Back", f"adm:apc:{cid}")]])
+    await show(update, f"➕ <b>CREATE POST</b> — {_type(ch)}\n\n{how}", kb)
 
 
 # ---- (a) range mode: the bot reads the source channel by message id
@@ -765,15 +718,15 @@ async def a_aprange(update, context, args):
     cid = int(args[0])
     if not streamer.ready:
         await show(update,
-                   "⚠️ Range mode needs the MTProto engine (API_ID, API_HASH, BASE_URL).\n"
-                   f"Status: <code>{html.escape(streamer.error or 'not running')}</code>\n\n"
-                   "You can still use <b>Send / forward files</b>.",
+                   "⚠️ RANGE NEEDS THE MTPROTO ENGINE (API_ID, API_HASH, BASE_URL).\n"
+                   f"STATUS: <code>{html.escape(streamer.error or 'not running')}</code>\n\n"
+                   "USE <b>SEND FILES</b> INSTEAD.",
                    K.back(f"apnew:{cid}"))
         return
     context.user_data["ap_cid"] = cid
     await ask(update, context, "ap_first",
-              "🔢 <b>Create posts by range</b>\n\nThe bot must be a <b>member / admin</b> of the source channel.\n\n"
-              "Step 1/2: forward the <b>FIRST</b> message of the source channel (or send its link).")
+              "🔢 <b>RANGE</b>\n\nTHE BOT MUST BE A MEMBER / ADMIN OF THE SOURCE CHANNEL.\n\n"
+              "STEP 1/2: FORWARD THE <b>FIRST</b> MESSAGE (OR SEND ITS LINK).")
 
 
 @state("ap_first")
@@ -781,13 +734,11 @@ async def st_ap_first(update, context):
     msg = update.effective_message
     ref = parse_post_ref(msg)
     if not ref:
-        await msg.reply_text("⚠️ Forward a post of the source channel or send a post link "
-                             "(<code>t.me/c/123/45</code>).", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ FORWARD A POST OR SEND A LINK (<code>t.me/c/123/45</code>).", reply_markup=K.cancel())
         return
     context.user_data["ap_src"] = ref
     context.user_data["state"] = "ap_last"
-    await msg.reply_text("Step 2/2: now forward the <b>LAST</b> message of the range (or send its link).",
-                         reply_markup=K.cancel())
+    await msg.reply_text("STEP 2/2: FORWARD THE <b>LAST</b> MESSAGE (OR SEND ITS LINK).", reply_markup=K.cancel())
 
 
 @state("ap_last")
@@ -795,45 +746,49 @@ async def st_ap_last(update, context):
     msg = update.effective_message
     ref, first = parse_post_ref(msg), context.user_data.get("ap_src")
     if not ref or not first:
-        await msg.reply_text("⚠️ Forward the last post or send its link.", reply_markup=K.cancel())
+        await msg.reply_text("⚠️ FORWARD THE LAST POST OR SEND ITS LINK.", reply_markup=K.cancel())
         return
     same = type(ref[0]) is not type(first[0]) or str(ref[0]).lower() == str(first[0]).lower()
     if not same or ref[1] < first[1] or ref[1] - first[1] + 1 > MAX_RANGE:
-        await msg.reply_text(f"⚠️ The last post must be from the same channel and come after the first "
-                             f"(max {MAX_RANGE} messages).", reply_markup=K.cancel())
+        await msg.reply_text(f"⚠️ SAME CHANNEL, AFTER THE FIRST POST (MAX {MAX_RANGE} MESSAGES).", reply_markup=K.cancel())
         return
     cid = context.user_data.get("ap_cid")
     src, a, b = first[0], first[1], ref[1]
     for k in ("state", "ap_src", "ap_cid"):
         context.user_data.pop(k, None)
-    status = await msg.reply_text("⏳ Reading the source channel…")
+    status = await msg.reply_text("⏳ READING THE SOURCE CHANNEL…")
     if ((await db.ap_get_channel(cid)) or {}).get("ptype") == "batch":
         if not BT.enabled():
-            await status.edit_text("⚠️ Add an imgbb API key first (🎨 Caption & Button → imgbb API Keys).",
-                                   reply_markup=K.back(f"apc:{cid}"))
+            await status.edit_text("⚠️ ADD AN IMGBB KEY FIRST (CAPTION → IMGBB KEYS).", reply_markup=K.back(f"apc:{cid}"))
             return
-        AP.spawn(_job(_run_range_batch(context.bot, src, a, b, cid, update.effective_user.id, status),
-                      context.bot, msg.chat_id))
-        return
-    AP.spawn(_job(_run_range(context.bot, src, a, b, cid, update.effective_user.id, status), context.bot, msg.chat_id))
+        job = _run_range_batch(context.bot, src, a, b, cid, update.effective_user.id, status)
+    else:
+        job = _run_range(context.bot, src, a, b, cid, update.effective_user.id, status)
+    AP.spawn(_job(job, context.bot, msg.chat_id))
 
 
-async def _run_range(bot, src, first: int, last: int, cid: int, by: int, status):
+async def _read_range(bot, status, src, first: int, last: int, convert) -> list:
+    """Read messages first..last of the source channel (200 at a time) and keep what `convert` accepts."""
     client = streamer.client
     ids = list(range(first, last + 1))
-    items = []
+    out = []
     for i in range(0, len(ids), 200):
         for m in await client.get_messages(src, ids[i:i + 200]):
-            it = AP.item_from_pyro(m)
+            it = convert(m)
             if it:
-                items.append(it)
+                out.append(it)
         try:
-            await bot.edit_message_text(f"⏳ Reading the source channel… {min(i + 200, len(ids))}/{len(ids)}",
+            await bot.edit_message_text(f"⏳ READING THE SOURCE CHANNEL… {min(i + 200, len(ids))}/{len(ids)}",
                                         chat_id=status.chat_id, message_id=status.message_id)
         except Exception:
             pass
+    return out
+
+
+async def _run_range(bot, src, first: int, last: int, cid: int, by: int, status):
+    items = await _read_range(bot, status, src, first, last, AP.item_from_pyro)
     if not items:
-        await bot.edit_message_text("⚠️ No files found in that range. Is the bot a member of the source channel?",
+        await bot.edit_message_text("⚠️ NO FILES FOUND IN THAT RANGE. IS THE BOT A MEMBER OF THE SOURCE CHANNEL?",
                                     chat_id=status.chat_id, message_id=status.message_id,
                                     reply_markup=K.back(f"apc:{cid}"))
         return
@@ -841,54 +796,40 @@ async def _run_range(bot, src, first: int, last: int, cid: int, by: int, status)
 
 
 async def _run_range_batch(bot, src, first: int, last: int, cid: int, by: int, status):
-    """Folder Batch: read the range, find the folders ("... Uploaded ✅" texts) and queue them as resumable jobs."""
-    client = streamer.client
-    ids = list(range(first, last + 1))
-    entries = []
-    for i in range(0, len(ids), 200):
-        for m in await client.get_messages(src, ids[i:i + 200]):
-            e = BT.item_or_marker(m)
-            if e:
-                entries.append(e)
-        try:
-            await bot.edit_message_text(f"⏳ Reading the source channel… {min(i + 200, len(ids))}/{len(ids)}",
-                                        chat_id=status.chat_id, message_id=status.message_id)
-        except Exception:
-            pass
+    """Vault Pack: read the range, find the folders ("... Uploaded ✅" texts) and queue them as resumable jobs."""
+    entries = await _read_range(bot, status, src, first, last, BT.item_or_marker)
     folders, left = BT.scan_folders(entries)
-    n_posts = sum(max(1, len(BT.plan_folder(f["items"])[2])) for f in folders if BT.plan_folder(f["items"])[0])
-    plain = sum(1 for f in folders if BT.plan_folder(f["items"])[0] and not BT.plan_folder(f["items"])[2])
+    plans = [BT.plan_folder(f["items"]) for f in folders]
+    usable = [p for p in plans if p[0]]
+    n_posts = sum(max(1, len(p[2])) for p in usable)
+    plain = sum(1 for p in usable if not p[2])
     fixed_ok = bool((await db.ap_get_channel(cid) or {}).get("fthumb"))
     queued = await BT.queue_folders(cid, folders, by)
     no_photo = len(folders) - queued
     if not queued:
-        text = ("⚠️ No folder found. A folder needs at least one photo and a text with “Uploaded” below its files."
-                if not folders else "⚠️ The folders had no photos, nothing to prepare.")
+        text = ("⚠️ NO FOLDER FOUND. A FOLDER NEEDS A PHOTO AND A TEXT WITH “UPLOADED” BELOW ITS FILES."
+                if not folders else "⚠️ THE FOLDERS HAD NO PHOTOS. NOTHING TO PREPARE.")
     else:
-        text = (f"✅ <b>{queued} folder(s)</b> queued → <b>{n_posts} post(s)</b> will be created.\n"
-                "The bot prepares them slowly in the background (imgbb cooldown) and the posts appear in 📚 All Posts. "
-                "If imgbb keys run out it pauses and continues by itself.")
+        text = (f"✅ <b>{queued}</b> FOLDER(S) QUEUED → <b>{n_posts}</b> POST(S).\n"
+                "THEY APPEAR IN 📚 ALL POSTS AS THE BOT PREPARES THEM.")
     if plain:
-        text += (f"\n🖼 {plain} folder(s) have no captioned photo → one post each with the fixed thumbnail"
-                 + ("." if fixed_ok else " ⚠️ <b>Fixed thumbnail is not set</b> (🎨 Caption & Button → Fixed Thumbnail), "
-                    "those posts cannot go out until you set it."))
+        text += (f"\n🖼 {plain} FOLDER(S) USE THE FIXED THUMBNAIL"
+                 + ("." if fixed_ok else " ⚠️ NOT SET YET (CAPTION → THUMBNAIL)."))
     if no_photo and queued:
-        text += f"\n⏭ Folders without any photo (skipped): {no_photo}"
+        text += f"\n⏭ SKIPPED (NO PHOTO): {no_photo}"
     if left:
-        text += f"\n⏭ Files after the last “Uploaded” text (ignored): {left}"
+        text += f"\n⏭ IGNORED (AFTER THE LAST “UPLOADED”): {left}"
     await bot.edit_message_text(text, chat_id=status.chat_id, message_id=status.message_id,
                                 reply_markup=K.back(f"apc:{cid}"))
 
 
 # ---- (b) collect mode: the admin sends / forwards the files to the bot
 def _collect_text(n: int) -> str:
-    return (f"📥 <b>Collecting files</b>\n\n{n} file(s) received.\n"
-            "Send / forward them <b>in order</b> (classic: caption file first, its captionless files below · "
-            "Image + Video: image 1, video 1, image 2, video 2 …), then tap <b>Done</b>.")
+    return f"📥 <b>COLLECTING FILES</b>\n\n{n} FILE(S) RECEIVED.\nSEND THEM IN ORDER, THEN TAP DONE."
 
 
 def _collect_kb():
-    return M([[B("✅ Done", "adm:apdone")], [B("❌ Cancel", "adm:cancel")]])
+    return M([[U("✅ Done", "adm:apdone"), U("❌ Cancel", "adm:cancel")]])
 
 
 @action("apcollect")
@@ -904,7 +845,7 @@ async def st_ap_collect(update, context):
     msg = update.effective_message
     kind, name = media_info(msg)
     if not kind:
-        await msg.reply_text("📎 Send files only, or tap <b>Done</b>.", reply_markup=_collect_kb())
+        await msg.reply_text("📎 SEND FILES ONLY, OR TAP <b>DONE</b>.", reply_markup=_collect_kb())
         return
     items = context.user_data.setdefault("ap_items", [])
     items.append(AP.item_from_ptb(msg, kind, name))
@@ -925,11 +866,11 @@ async def a_apdone(update, context, args):
     if not items or cid is None:
         if cid is not None:
             ud["state"] = "ap_collect"       # the router cleared it; keep collecting
-        await show(update, "⚠️ Send at least one file first.\n\n" + _collect_text(0), _collect_kb())
+        await show(update, "⚠️ SEND AT LEAST ONE FILE FIRST.\n\n" + _collect_text(0), _collect_kb())
         return
     for k in ("state", "ap_items", "ap_cid", "ap_status", "ap_ts"):
         ud.pop(k, None)
-    status = await update.effective_chat.send_message(f"⏳ Starting… {len(items)} file(s)")
+    status = await update.effective_chat.send_message(f"⏳ STARTING… {len(items)} FILE(S)")
     AP.spawn(_job(AP.create_posts(context.bot, items, cid, update.effective_user.id,
                                   status.chat_id, status.message_id),
                   context.bot, status.chat_id))

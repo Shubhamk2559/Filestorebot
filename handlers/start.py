@@ -174,7 +174,7 @@ async def _limit_reached(bot, chat_id: int):
 
 async def request_access(bot, chat_id: int, link: dict):
     """Entry point for a user who passed force-subscribe: cooldown -> daily limit -> Monetag ad gate -> files."""
-    free = bool(link.get("no_ads"))              # Image + Video post: the image link is a free preview (no ad, no limit)
+    free = bool(link.get("no_ads"))              # Duo Reel post: the image link is a free preview (no ad, no limit)
     if not is_admin(chat_id):
         wait = COOLDOWN_SECONDS - (time.monotonic() - _last_open.get(chat_id, 0.0))
         if wait > 0:
