@@ -32,6 +32,7 @@ from utils.links import share_link
 from utils import preview as PV
 from utils import batch as BT
 from utils import support as SUP
+from utils.ui import styled
 
 log = logging.getLogger(__name__)
 
@@ -251,7 +252,7 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
         if error:
             text += f"\n❌ <code>{html.escape(error)}</code>"
         try:
-            await bot.edit_message_text(text, chat_id=status_chat, message_id=status_msg,
+            await bot.edit_message_text(styled(text), chat_id=status_chat, message_id=status_msg,
                                         reply_markup=kb if final else None)
         except TelegramError:
             pass
