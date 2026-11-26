@@ -336,8 +336,81 @@ async def get_link(token: str):
     return await links_col.find_one({"_id": token})
 
 
+LINK_CACHE: dict = {}   # token -> (time, link doc); utils/web.py reads it, purge_link() clears it
+
+
 async def delete_link(token: str):
+    """Revoke ONE link (plain). Use purge_link() to remove it from the whole database."""
     await links_col.delete_one({"_id": token})
+    LINK_CACHE.pop(token, None)
+
+
+async def purge_link(token: str, posts: bool = True, _seen=None) -> list:
+    """Delete a link COMPLETELY from MongoDB and return the Database-Channel message ids that belonged only to it
+    (the caller deletes those messages from the channel).
+
+    Removes: the link itself, its file records (FSB:<token>:n backup codes - so a restore can never bring it back),
+    every user's saved progress for it, the Autoposter posts that point to it (+ their thumbnail copies and their
+    place in the shuffled queue), and finished Vault Pack jobs that created it.
+    Range links (no backup codes) only point to messages that other links may share, so those channel
+    messages are never touched.
+    posts=False: leave the Autoposter posts alone (the caller already removed them)."""
+    seen = _seen if _seen is not None else set()
+    if token in seen:
+        return []
+    seen.add(token)
+    msg_ids: list = []
+
+    # the link + its file records
+    await links_col.delete_one({"_id": token})
+    LINK_CACHE.pop(token, None)
+    own = re.compile(rf"^FSB:{re.escape(token)}:\d+$")
+    async for d in files_col.find({"code": own}, {"msg_id": 1}):
+        msg_ids.append(d["msg_id"])
+    await files_col.delete_many({"code": own})
+
+    # saved per-user progress of this link
+    await users_col.update_many({f"prog.{token}": {"$exists": True}}, {"$unset": {f"prog.{token}": ""}})
+
+    # Vault Pack jobs that made this link
+    await ap_batches_col.delete_many({"vtoken": token})
+
+    if posts:
+        found = await ap_posts_col.find({"$or": [{"_id": token}, {"vtoken": token}]}).to_list(None)
+        if found:
+            msg_ids += await _drop_posts(found, seen)
+    return msg_ids
+
+
+async def _drop_posts(found: list, seen: set) -> list:
+    """Delete Autoposter posts + thumbnail copies + queue entries; purge their other links when nobody else uses them."""
+    msg_ids: list = []
+    ids = [p["_id"] for p in found]
+    await ap_posts_col.delete_many({"_id": {"$in": ids}})
+    for cid in {p["chan"] for p in found}:
+        await ap_channels_col.update_one({"_id": cid}, {"$pull": {"queue_state.queue": {"$in": ids}}})
+    for p in found:
+        if p.get("thumb_token"):
+            code = make_code(p["thumb_token"], 0)
+            async for d in files_col.find({"code": code}, {"msg_id": 1}):
+                msg_ids.append(d["msg_id"])
+            await files_col.delete_many({"code": code})
+        for t in post_tokens(p):                       # the post's links (Duo Reel: image + video; Vault Pack: video)
+            if t in seen:
+                continue
+            if await ap_posts_col.count_documents({"vtoken": t}, limit=1):   # another post still uses it
+                continue
+            msg_ids += await purge_link(t, posts=False, _seen=seen)
+    return msg_ids
+
+
+async def purge_post(token: str, with_link: bool = False) -> list:
+    """Delete ONE Autoposter post. with_link=True also removes its links from the database entirely."""
+    p = await ap_posts_col.find_one({"_id": token})
+    if not p:
+        return await purge_link(token, posts=False) if with_link else []
+    seen: set = set() if with_link else set(post_tokens(p))     # seen = links we must NOT touch
+    return await _drop_posts([p], seen)
 
 
 async def inc_views(token: str):
@@ -592,17 +665,27 @@ async def ap_delete_post(token: str):
     await ap_posts_col.delete_one({"_id": token})
 
 
-async def ap_wipe(cid: int, only_posted: bool = False, links: bool = False) -> int:
-    """Delete every post of a channel (optionally only the posted ones, optionally their share links too)."""
+async def ap_wipe(cid: int, only_posted: bool = False, links: bool = False):
+    """Delete every post of a channel (optionally only the posted ones, optionally their share links too).
+    Returns (number of posts, Database-Channel message ids to delete)."""
     q = {"chan": cid, **({"posted": True} if only_posted else {})}
-    docs = await ap_posts_col.find(q, {"_id": 1, "vtoken": 1}).to_list(None)
-    tokens = [d["_id"] for d in docs]
-    if tokens:
-        await ap_posts_col.delete_many({"_id": {"$in": tokens}})
-        if links:
-            await links_col.delete_many({"_id": {"$in": tokens + [d["vtoken"] for d in docs if d.get("vtoken")]}})
-        await ap_channels_col.update_one({"_id": cid}, {"$set": {"queue_state": _blank_queue()}})
-    return len(tokens)
+    docs = await ap_posts_col.find(q).to_list(None)
+    if not docs:
+        return 0, []
+    msg_ids: list = []
+    if links:
+        seen: set = set()
+        msg_ids = await _drop_posts(docs, seen)
+    else:
+        await ap_posts_col.delete_many({"_id": {"$in": [d["_id"] for d in docs]}})
+        for d in docs:                                  # thumbnail copies belong to the post only
+            if d.get("thumb_token"):
+                code = make_code(d["thumb_token"], 0)
+                async for f in files_col.find({"code": code}, {"msg_id": 1}):
+                    msg_ids.append(f["msg_id"])
+                await files_col.delete_many({"code": code})
+    await ap_channels_col.update_one({"_id": cid}, {"$set": {"queue_state": _blank_queue()}})
+    return len(docs), msg_ids
 
 
 async def ap_reset(cid: int):
