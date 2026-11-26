@@ -587,6 +587,24 @@ async def a_autodel(update, context, args):
                kb([[b(0, "Off"), b(5, "5 min")], [b(10, "10 min"), b(30, "30 min")]], ub("🔙 Back", "adm:settings")))
 
 
+@action("dlimit")
+async def a_dlimit(update, context, args):
+    """dlimit:<-1|0|1> - global daily limit (links per user per day), changed one by one (1..1000, 0 = just refresh)."""
+    step = int(args[0]) if args else 0
+    cur = db.limit_value()
+    msg = ""
+    if step:
+        new = min(1000, max(1, cur + step))
+        if new != cur:
+            await S.set("daily_limit", new)
+            cur, msg = new, "✅ SAVED."
+    await show(update,
+               note(msg) + head("📊", "Daily Limit", f"CURRENT ▸ <b>{cur}</b> LINKS PER USER PER DAY\n\n"
+                                                    "EACH LINK USES ITS CHANNEL'S LIMIT COUNT (DEFAULT 1). ADMINS ARE EXEMPT."),
+               kb([[ub("➖", "adm:dlimit:-1"), ub(f"📊 {cur}", "adm:dlimit:0"), ub("➕", "adm:dlimit:1")]],
+                  ub("🔙 Back", "adm:settings")))
+
+
 @action("protect")
 async def a_protect(update, context, args):
     msg = ""
