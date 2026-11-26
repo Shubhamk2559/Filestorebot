@@ -13,8 +13,8 @@ except Exception:                      # not installed / not supported -> normal
 
 from telegram.constants import ParseMode
 from telegram.error import Conflict, NetworkError
-from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, ChatMemberHandler, CommandHandler,
-                          ContextTypes, Defaults, MessageHandler, filters)
+from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, ChatJoinRequestHandler, ChatMemberHandler,
+                          CommandHandler, ContextTypes, Defaults, MessageHandler, filters)
 
 import config
 from database import db
@@ -24,6 +24,7 @@ from handlers import backup as _backup          # noqa: F401  registers the Back
 from handlers import analytics as _analytics    # noqa: F401  registers the Earnings / Analytics screens
 from handlers import transfer as _transfer      # noqa: F401  registers the Transfer screens (user-account channel copy)
 from handlers import usage as _usage            # noqa: F401  registers the VPS Usage / Plan advice screens
+from handlers import joinreq                    # Join Request Approval (silent, ON/OFF per channel / group)
 from handlers import contact                    # users can message the owner through the bot (fallback)
 from handlers import support                    # Support Bot: second bot, one forum topic per user
 from utils.backup import backup_loop
@@ -119,10 +120,11 @@ def main():
     # remember where the bot is admin -> shown as inline buttons in the panel (utils/chats.py)
     app.add_handler(ChatMemberHandler(_chats.on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, _chats.on_channel_post), group=1)
+    app.add_handler(ChatJoinRequestHandler(joinreq.on_join_request))                  # silent approve, no message
     app.add_error_handler(on_error)
 
     # only the update types this bot really uses (less traffic, less CPU)
-    app.run_polling(allowed_updates=["message", "callback_query", "channel_post", "my_chat_member"],
+    app.run_polling(allowed_updates=["message", "callback_query", "channel_post", "my_chat_member", "chat_join_request"],
                     drop_pending_updates=True, timeout=30)
 
 

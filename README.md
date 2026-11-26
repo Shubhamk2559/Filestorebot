@@ -55,6 +55,7 @@ Put your own reverse proxy (nginx/Caddy, `proxy_buffering off`) in front of port
 - **My Links** - list, view views/count, **Revoke** any link (owner sees all links).
 - **Database Channel** - forward a message from it / send ID / @username; bot verifies admin rights.
 - **Force-Sub** - add/remove channels (public or private), reorder with up/down, enable/disable.
+- **Join Requests** (Settings) - add any channel or group; per chat only **ON / OFF**. While ON the bot approves every join request silently (no message, no DM). Bot needs admin + *Invite Users*, and the chat's invite link must use *Request admin approval*.
 - **Start Image / Caption** - photo + HTML text; placeholders `{first_name}`, `{mention}`.
 - **Join Buttons** - channel buttons are automatic; add custom ones as `Text - URL` (`|` for same row).
 - **Auto-Delete** - Off / 5 / 10 / 30 min (survives restarts). **Protect Content** - blocks forwarding/saving.
