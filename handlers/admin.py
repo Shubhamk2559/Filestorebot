@@ -38,7 +38,7 @@ from utils.helpers import (
 )
 from utils.keyboards import grid, kb, nm, pager, ub
 from utils.links import share_link
-from utils.ui import ago, esc, head, mb, note, onoff
+from utils.ui import ago, esc, head, mb, note, onoff, styled
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ def state(name):
 async def show(update, text, markup=None):
     """Edit the panel message in place, or send a new one."""
     q = update.callback_query
+    text = styled(text)     # title stays as is; everything below it -> quote + small font
     opts = dict(reply_markup=markup, parse_mode=ParseMode.HTML, link_preview_options=NOPREVIEW)
     try:
         if q:
