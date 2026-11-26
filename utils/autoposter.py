@@ -5,7 +5,7 @@ Autoposter engine (no UI here - the panel lives in handlers/autoposter.py).
   parse_slots / fmt_slots   "09:00 2" style timing input
   item_from_ptb / item_from_pyro   one source message -> a small dict
   group_posts               caption file = thumbnail, captionless files below it = the post's files
-  group_pairs               "Image + Video" type: image 1, video 1, image 2, video 2 ... -> one post per pair
+  group_pairs               "Duo Reel" type: image 1, video 1, image 2, video 2 ... -> one post per pair
   create_posts              copy everything into the Database Channel (with backup codes), make links + post records
   send_post                 publish one post (thumbnail + caption + "Get Files" button) to a channel / group
   ensure_queue              shuffled queue: every post once per cycle in random order (loop = reshuffle each cycle,
@@ -148,7 +148,7 @@ VID_KINDS = ("video", "animation", "document")
 
 def group_pairs(items: list):
     """
-    "Image + Video" type: the source is  image 1, video 1, image 2, video 2 ...
+    "Duo Reel" type: the source is  image 1, video 1, image 2, video 2 ...
     (image N + video N) = ONE post with two links: the image (free preview) and the video (ad gate).
     Returns (posts, orphans). Each post = {"thumb": image item, "files": [video item], "pair": True}.
     An image not followed by a video, or a video without an image above it, is an orphan (ignored).
@@ -218,9 +218,9 @@ async def _store(bot, channel_id: int, it: dict, code: str, by: int) -> int:
 async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, status_msg: int):
     """Group `items` into posts, store them in the Database Channel and register them for channel `cid`."""
     channel = S.get("db_channel")
-    kb = M([[B("📺 Open channel", callback_data=f"adm:apc:{cid}")]])
+    kb = M([[B("📺 OPEN CHANNEL", callback_data=f"adm:apc:{cid}")]])
     if not channel:
-        await bot.edit_message_text("⚠️ Database Channel is not set.", chat_id=status_chat,
+        await bot.edit_message_text("⚠️ DATABASE CHANNEL IS NOT SET.", chat_id=status_chat,
                                     message_id=status_msg, reply_markup=kb)
         return
 
@@ -240,13 +240,13 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
         if not final and time.time() - last_edit < 3:
             return
         last_edit = time.time()
-        head = "⏳ <b>Creating posts…</b>" if not final else ("✅ <b>Posts created</b>" if not error else "⚠️ <b>Stopped</b>")
-        text = (f"{head}\n\n📝 Posts: {made}\n📁 Files stored: {copied_files}/{total_files}\n")
+        head = "⏳ <b>CREATING POSTS…</b>" if not final else ("✅ <b>POSTS CREATED</b>" if not error else "⚠️ <b>STOPPED</b>")
+        text = (f"{head}\n\n📝 POSTS: {made}\n📁 FILES: {copied_files}/{total_files}\n")
         if skipped:
-            text += f"⏭ Skipped (caption but no files below): {skipped}\n"
+            text += f"⏭ SKIPPED (NO FILES BELOW CAPTION): {skipped}\n"
         if orphans:
-            text += (f"⏭ Files without their image / video partner (ignored): {orphans}\n" if pair_mode
-                     else f"⏭ Files before the first caption (ignored): {orphans}\n")
+            text += (f"⏭ IGNORED (NO IMAGE / VIDEO PARTNER): {orphans}\n" if pair_mode
+                     else f"⏭ IGNORED (BEFORE FIRST CAPTION): {orphans}\n")
         if error:
             text += f"\n❌ <code>{html.escape(error)}</code>"
         try:
@@ -273,7 +273,7 @@ async def create_posts(bot, items: list, cid: int, by: int, status_chat: int, st
                 break
             cap_html = img["cap_html"] if img["cap"].strip() else vid["cap_html"]
             plain = img["cap"].strip() or vid["cap"].strip()
-            title = re.sub(r"\s+", " ", plain).strip()[:40] or "Image + Video"
+            title = re.sub(r"\s+", " ", plain).strip()[:40] or "Duo Reel"
             preview_url, image_url = await PV.make_preview_url(channel["id"], img_id, title)   # imgbb -> Telegraph (None = off / failed)
             await db.create_link([img_id], by, title + " (preview)", token=token, no_ads=True)
             await db.create_link([vid_id], by, title + " (video)", token=vtoken)
@@ -351,8 +351,8 @@ def _fit(cap: str) -> str:
 
 
 async def _send_batch(bot, chat_id: int, channel: dict, post: dict):
-    """Folder Batch post: the captioned photo + the channel's fixed caption. The tags {Preview Image} / {Video Link} /
-    {Post Number} are replaced ONLY when the channel's type is Folder Batch (otherwise the text goes out as written).
+    """Vault Pack post: the captioned photo + the channel's fixed caption. The tags {Preview Image} / {Video Link} /
+    {Post Number} are replaced ONLY when the channel's type is Vault Pack (otherwise the text goes out as written).
     The post number is taken now, at posting time: last number + 1. It is saved only after Telegram accepted the
     post, and the whole step is serialised per channel -> never a repeat, never a gap, a failed send reuses it."""
     if post.get("fixed_thumb"):                # folder without a captioned photo -> the channel's fixed thumbnail
@@ -381,7 +381,7 @@ async def _send_batch(bot, chat_id: int, channel: dict, post: dict):
 
 
 async def _pair_media(bot, ch: dict, post: dict):
-    """(DB-channel message id to show, keyboard) of an Image + Video post.
+    """(DB-channel message id to show, keyboard) of an Duo Reel post.
     The picture = the channel's fixed thumbnail only (the post's own image is never used). Two buttons: preview + video."""
     thumb = None
     if ch.get("fthumb"):
@@ -464,7 +464,7 @@ async def run_slot(bot, ch: dict, n: int):
             err = await send_post(bot, cid, post, mark=False)
             if err:
                 await notify_owner(bot, f"ap_err_{cid}",
-                                   f"⚠️ Autoposter: cannot post in <b>{html.escape(ch['title'])}</b>:\n"
+                                   f"⚠️ <b>AUTOPOSTER</b>: CANNOT POST IN <b>{html.escape(ch['title'])}</b>:\n"
                                    f"<code>{html.escape(err)}</code>", every=1800)
                 if err.startswith("thumbnail not found"):
                     await db.ap_skip_cursor(cid)        # this post can never be sent -> do not block the queue
@@ -482,12 +482,12 @@ async def run_slot(bot, ch: dict, n: int):
         if finished and not loop and (await db.ap_counts(cid))[0]:
             await db.ap_set(cid, enabled=False)
             await notify_owner(bot, f"ap_done_{cid}",
-                               f"⏸ Autoposter: every post of <b>{html.escape(ch.get('title', ''))}</b> is posted "
-                               "(one pass). Create more posts and turn it ON, or reshuffle to start over.", every=60)
+                               f"⏸ <b>{html.escape(ch.get('title', ''))}</b>: ALL POSTS DONE (ONE PASS).\n"
+                               "CREATE MORE POSTS AND TURN IT ON, OR RESHUFFLE.", every=60)
 
 
 async def _run_slot_batch(bot, ch: dict):
-    """Folder Batch channel: at most ONE post per time. Posts of the same folder keep the gap (30+ days, random jitter),
+    """Vault Pack channel: at most ONE post per time. Posts of the same folder keep the gap (30+ days, random jitter),
     and any two posts of the channel are at least `min_hours` apart - so nothing ever goes out together."""
     cid = ch["_id"]
     post, why = await BT.pick_post(cid, ch)
@@ -501,13 +501,13 @@ async def _run_slot_batch(bot, ch: dict):
                 else:
                     await db.ap_set(cid, enabled=False)
                     await notify_owner(bot, f"ap_done_{cid}",
-                                       f"⏸ Autoposter: every post of <b>{html.escape(ch.get('title', ''))}</b> is posted "
-                                       "(one pass). Create more posts and turn it ON.", every=60)
+                                       f"⏸ <b>{html.escape(ch.get('title', ''))}</b>: ALL POSTS DONE (ONE PASS).\n"
+                                       "CREATE MORE POSTS AND TURN IT ON.", every=60)
         return
     err = await send_post(bot, cid, post, mark=False)
     if err:
         await notify_owner(bot, f"ap_err_{cid}",
-                           f"⚠️ Autoposter: cannot post in <b>{html.escape(ch['title'])}</b>:\n"
+                           f"⚠️ <b>AUTOPOSTER</b>: CANNOT POST IN <b>{html.escape(ch['title'])}</b>:\n"
                            f"<code>{html.escape(err)}</code>", every=1800)
 
 

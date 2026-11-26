@@ -1,7 +1,7 @@
 """
 utils/batch.py
-Post type 3 - "Folder Batch" (ptype = "batch"). Everything here only runs for channels whose Post Type is Folder Batch;
-Classic and Image + Video channels never touch this module.
+Post type 3 - "Vault Pack" (ptype = "batch"). Everything here only runs for channels whose Post Type is Vault Pack;
+Solo Drop and Duo Reel channels never touch this module.
 
 Source channel layout (range mode, first + last message link):
 
@@ -146,7 +146,7 @@ def mask(k: str) -> str:
 
 def key_state(k: str) -> str:
     left = _rest.get(k, 0) - time.time()
-    return f"😴 rests {int(left // 60) + 1} min" if left > 0 else "✅ ready"
+    return f"😴 {int(left // 60) + 1} MIN" if left > 0 else "✅ READY"
 
 
 async def upload(session: aiohttp.ClientSession, data: bytes) -> str:
@@ -318,7 +318,7 @@ async def worker_loop(bot):
                 await _process(bot, b)
                 if not await db.ap_batches_col.count_documents({"chan": b["chan"], "status": {"$ne": "done"}}):
                     await notify_owner(bot, f"batch_done_{b['chan']}",
-                                       "✅ <b>Folder Batch</b>: every folder is processed, the posts are in the queue.",
+                                       "✅ <b>VAULT PACK</b>: ALL FOLDERS ARE READY. POSTS ARE IN THE QUEUE.",
                                        every=60)
             except asyncio.CancelledError:
                 raise
@@ -326,9 +326,9 @@ async def worker_loop(bot):
                 log.warning("Batch %s paused: %s: %s", b["_id"], type(e).__name__, e)
                 await _set(b["_id"], status="waiting", error=str(e)[:300], next_try=time.time() + RETRY_WAIT)
                 await notify_owner(bot, f"batch_err_{b['chan']}",
-                                   f"⚠️ <b>Folder Batch</b> paused on “{html.escape(b.get('name', ''))}”\n"
+                                   f"⚠️ <b>VAULT PACK</b> PAUSED ON “{html.escape(b.get('name', ''))}”\n"
                                    f"<code>{html.escape(str(e)[:300])}</code>\n"
-                                   "It continues by itself in 10 minutes (add an imgbb key if all keys are used up).",
+                                   "IT CONTINUES BY ITSELF IN 10 MIN (ADD AN IMGBB KEY IF ALL ARE USED UP).",
                                    every=3600)
         except asyncio.CancelledError:
             raise

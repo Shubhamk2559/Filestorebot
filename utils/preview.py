@@ -1,6 +1,6 @@
 """
 utils/preview.py
-Image + Video posts: the free preview image is hosted on imgbb, embedded in a Telegraph article, and the
+Duo Reel posts: the free preview image is hosted on imgbb, embedded in a Telegraph article, and the
 Telegraph link becomes the "Preview" button (opens directly, the bot is not involved).
 
   make_preview_url(db_channel_id, msg_id, title)  ->  "https://telegra.ph/..." or None
