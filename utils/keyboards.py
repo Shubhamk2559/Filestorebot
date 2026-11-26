@@ -80,6 +80,7 @@ def main_panel(owner: bool):
 def settings_panel(owner: bool = False):
     items = [
         ("📡 DB Channel", "adm:dbch"), ("🔔 Force-Sub", "adm:fsub"),
+        ("✅ Join Requests", "adm:jr"),
         ("🖼 Start Image", "adm:simg"), ("📝 Start Caption", "adm:scap"),
         ("🔘 Join Buttons", "adm:btns"), ("⏱ Auto-Delete", "adm:autodel"),
         ("🛡 Protect", "adm:protect"),
