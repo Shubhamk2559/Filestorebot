@@ -456,6 +456,50 @@ async def a_fsubrm(update, context, args):
     await show_fsub(update, "🗑 CHANNEL REMOVED.")
 
 
+# ===================================================================== website channel
+
+def _hch_text(msg: str = "") -> str:
+    c = S.get("home_channel")
+    cur = f"<b>{esc(c['title'])}</b>\n{esc(c['link'])}" if c else "NOT SET (THE ENV / FORCE-SUB CHANNEL IS USED, IF ANY)"
+    return note(msg) + head("🌐", "Site Channel",
+                            "THE CHANNEL SHOWN ON TOP OF THE WEBSITE MAIN PAGE.\n"
+                            "THE BOT MUST BE AN ADMIN IN THAT CHANNEL.\n\n"
+                            f"<b>CURRENT</b>\n{cur}")
+
+
+@action("hch")
+async def a_hch(update, context, args):
+    rows = [[ub("✏️ Set / Change", "adm:hchset")]]
+    if S.get("home_channel"):
+        rows.append([ub("🗑 Remove", "adm:hchrm")])
+    await show(update, _hch_text(), kb(rows, ub("🔙 Back", "adm:settings")))
+
+
+@action("hchset")
+async def a_hchset(update, context, args):
+    await ask_chat(update, context, "hch",
+                   head("🌐", "Site Channel", "CHOOSE THE CHANNEL FOR THE WEBSITE MAIN PAGE."))
+
+
+@state("hch")
+async def st_hch(update, context):
+    chat = await resolve_channel(update, context, need_post=False)
+    if not chat:
+        return
+    link = await make_invite_link(context.bot, chat)
+    if not link:
+        await warn(update, "COULD NOT GET A LINK. MAKE THE CHANNEL PUBLIC OR GIVE THE BOT THE “INVITE USERS” PERMISSION.")
+        return
+    await S.set("home_channel", {"id": chat.id, "title": chat.title or str(chat.id), "link": link})
+    await done(update, context, f"✅ WEBSITE CHANNEL SET ▸ <b>{esc(chat.title or '')}</b>.", "hch")
+
+
+@action("hchrm")
+async def a_hchrm(update, context, args):
+    await S.set("home_channel", None)
+    await show(update, _hch_text("🗑 REMOVED."), kb([[ub("✏️ Set / Change", "adm:hchset")]], ub("🔙 Back", "adm:settings")))
+
+
 # ===================================================================== start image / caption
 
 @action("simg")
