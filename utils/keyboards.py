@@ -86,6 +86,7 @@ def settings_panel(owner: bool = False):
         ("🛡 Protect", "adm:protect"),
         ("📊 Daily Limit", "adm:dlimit"),
         ("🏷 File Caption", "adm:fcap"),
+        ("🌐 Site Channel", "adm:hch"),
     ]
     if owner:
         items.append(("🛟 Support", "adm:sup"))

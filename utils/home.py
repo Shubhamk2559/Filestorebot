@@ -3,8 +3,11 @@ utils/home.py - landing page served at https://<your-domain>/
 
   * theme   : light sky blue (same family as the ads page): solid + soft gradient, white card, no neon / glow.
   * image   : put your picture in  static/  as  home.jpg / home.jpeg / home.png / home.webp
-  * button  : the main button opens your bot (t.me/<bot username>). HOME_LINK in .env points it somewhere else.
-  * channel : ONE Telegram channel link below the main button. Taken from (in this order)
+  * font    : Baloo Bhai 2 (Google Fonts), different weights / sizes for title, text, labels and buttons.
+  * layout  : title + text, then the CHANNEL box on top, then the Telegram BOT button below it.
+  * button  : the bot button opens your bot (t.me/<bot username>). HOME_LINK in .env points it somewhere else.
+  * channel : ONE Telegram channel. Taken from (in this order)
+              0) the panel: Settings -> Site Channel (set from Telegram, the bot must be admin there)
               1) HOME_CHANNEL in .env           ->  https://t.me/yourchannel
                  (HOME_CHANNEL_NAME = text shown for it, optional)
               2) the first entry of HOME_CHANNELS in .env   ->  Name=https://t.me/xxx;...   (old setting still works)
@@ -41,6 +44,13 @@ def _link(bot) -> str:
 
 def _channel(bot=None):
     """(name, url) of the single channel shown on the page, or None."""
+    try:
+        from database.db import settings as S
+        hc = S.get("home_channel") or {}
+        if (hc.get("link") or "").strip():
+            return (hc.get("title") or "").strip() or "Our Channel", hc["link"].strip()
+    except Exception:
+        pass
     url, name = os.getenv("HOME_CHANNEL", "").strip(), os.getenv("HOME_CHANNEL_NAME", "").strip()
     if not url:
         for part in os.getenv("HOME_CHANNELS", "").split(";"):
@@ -75,8 +85,8 @@ CSS = """
 :root{--sky:#87cefa;--sky2:#5bb7ef;--sky-d:#2b8fd8;--ink:#12354d;--muted:#4d7088;--line:#b5defa;--bg1:#eaf6fe;--bg2:#c9e8fb}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;min-height:100%}
-body{min-height:100vh;color:var(--ink);font-family:"Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-background:linear-gradient(180deg,var(--bg1),var(--bg2)) fixed;overflow-x:hidden;position:relative}
+body{min-height:100vh;color:var(--ink);font-family:"Baloo Bhai 2",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-weight:500;
+line-height:1.4;background:linear-gradient(180deg,var(--bg1),var(--bg2)) fixed;overflow-x:hidden;position:relative}
 .sky{position:fixed;inset:0 0 auto 0;height:340px;pointer-events:none;z-index:0;
 background:linear-gradient(180deg,#9bd7fa 0%,rgba(155,215,250,.55) 45%,rgba(234,246,254,0) 100%)}
 .sky i{position:absolute;border-radius:50%;background:#fff;opacity:.55}
@@ -89,29 +99,29 @@ padding:max(34px,env(safe-area-inset-top)) 18px max(26px,env(safe-area-inset-bot
 box-shadow:0 0 0 5px var(--sky2),0 16px 34px rgba(35,120,180,.25);position:relative;z-index:2;animation:up .5s ease both}
 .ring{width:100%;height:100%;border-radius:50%;overflow:hidden;background:#dff1fd}
 .ring img{width:100%;height:100%;object-fit:cover;display:block}
-.card{width:100%;margin-top:-62px;padding:78px 20px 20px;border-radius:26px;background:#fff;border:1px solid var(--line);text-align:center;
+.card{width:100%;margin-top:-62px;padding:78px 20px 22px;border-radius:26px;background:#fff;border:1px solid var(--line);text-align:center;
 box-shadow:0 14px 36px rgba(43,143,216,.16);animation:up .55s .08s ease both}
 .noimg .card{margin-top:0;padding-top:26px}
-h1{margin:0;font-weight:800;font-size:clamp(1.7rem,8.4vw,2.15rem);line-height:1.15;letter-spacing:-.4px;color:var(--ink)}
+h1{margin:0;font-weight:800;font-size:clamp(2rem,9.6vw,2.55rem);line-height:1.08;letter-spacing:-.2px;color:var(--ink)}
 h1 span{background:linear-gradient(100deg,#4db3f0,#1f7cc6);-webkit-background-clip:text;background-clip:text;color:transparent}
-.sub{margin:10px auto 0;max-width:320px;color:var(--muted);font-size:.97rem;line-height:1.6}
-.btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-top:20px;padding:16px 18px;border-radius:15px;
-color:#fff;text-decoration:none;font-weight:700;font-size:1.04rem;background:linear-gradient(180deg,#4db3f0,#2b8fd8);
-box-shadow:0 8px 18px rgba(43,143,216,.32)}
-.btn:active{transform:translateY(1px);box-shadow:0 4px 10px rgba(43,143,216,.3)}
-.div{display:flex;align-items:center;gap:10px;margin:20px 0 12px;color:#6c8ca3;font-size:.74rem;font-weight:700;letter-spacing:1.4px;text-transform:uppercase}
+.sub{margin:6px auto 0;max-width:330px;color:var(--muted);font-weight:500;font-size:1.08rem;line-height:1.35}
+.div{display:flex;align-items:center;gap:10px;margin:18px 0 10px;color:#5f819a;font-size:.86rem;font-weight:700;letter-spacing:1.6px;text-transform:uppercase}
 .div:before,.div:after{content:"";flex:1;height:1px;background:var(--line)}
 .ch{display:flex;align-items:center;gap:13px;padding:12px 14px;border-radius:16px;text-decoration:none;text-align:left;
 color:var(--ink);background:#f1f9ff;border:1px solid var(--line)}
 .ch:active{background:#e3f3fe}
-.ch .ic{flex:none;width:44px;height:44px;border-radius:13px;display:grid;place-items:center;background:var(--sky2)}
-.ch .tx{flex:1;min-width:0}.ch b{display:block;font-size:1rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ch small{display:block;margin-top:1px;color:var(--muted);font-size:.82rem}
-.ch .go{flex:none;color:var(--sky-d);font-size:1.5rem;line-height:1;font-weight:700}
-.on{margin-top:18px;color:var(--muted);font-size:.9rem;font-weight:600}
+.ch .ic{flex:none;width:46px;height:46px;border-radius:13px;display:grid;place-items:center;background:var(--sky2)}
+.ch .tx{flex:1;min-width:0}.ch b{display:block;font-size:1.2rem;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch small{display:block;margin-top:1px;color:var(--muted);font-size:.92rem;font-weight:500;line-height:1.2}
+.ch .go{flex:none;color:var(--sky-d);font-size:1.7rem;line-height:1;font-weight:700}
+.btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:13px 18px 14px;border-radius:15px;
+color:#fff;text-decoration:none;font-weight:700;font-size:1.24rem;line-height:1.2;background:linear-gradient(180deg,#4db3f0,#2b8fd8);
+box-shadow:0 8px 18px rgba(43,143,216,.32)}
+.btn:active{transform:translateY(1px);box-shadow:0 4px 10px rgba(43,143,216,.3)}
+.on{margin-top:16px;color:var(--muted);font-size:1rem;font-weight:600}
 .on b{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sky-d);margin-right:8px;vertical-align:1px}
-.sup{display:inline-block;margin-top:10px;color:var(--muted);font-size:.9rem;text-decoration:underline;text-underline-offset:3px}
-.fine{margin-top:16px;color:#6c8ca3;font-size:.76rem;text-align:center}
+.sup{display:inline-block;margin-top:6px;color:var(--muted);font-size:1rem;font-weight:600;text-decoration:underline;text-underline-offset:3px}
+.fine{margin-top:12px;color:#6c8ca3;font-size:.86rem;font-weight:400;text-align:center}
 @keyframes up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important}}
 """
@@ -149,7 +159,7 @@ async def page(request: web.Request) -> web.Response:
 <meta name="description" content="{text}">
 <meta property="og:title" content="{t1} {t2} - Telegram Bot"><meta property="og:description" content="{text}">{og}
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+Bhai+2:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>{CSS}</style></head>
 <body class="{'' if has_img else 'noimg'}"><div class="sky"><i></i><i></i><i></i></div>
 <main>
@@ -157,11 +167,12 @@ async def page(request: web.Request) -> web.Response:
 <section class="card">
 <h1>{title_html}</h1>
 <p class="sub">{text}</p>
-<a class="btn" href="{link}">{PLANE.format(s=21)}<span>{button}</span></a>
 {chan}
+<div class="div">Telegram bot</div>
+<a class="btn" href="{link}">{PLANE.format(s=21)}<span>{button}</span></a>
 </section>
 <div class="on"><b></b>Always Online</div>
 {sup}
 <div class="fine">18+ only. By continuing you confirm you are an adult.</div>
 </main></body></html>"""
-    return web.Response(text=body, content_type="text/html", headers={"Cache-Control": "public, max-age=300"})
+    return web.Response(text=body, content_type="text/html", headers={"Cache-Control": "public, max-age=30"})

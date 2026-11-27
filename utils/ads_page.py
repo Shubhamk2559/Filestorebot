@@ -37,9 +37,6 @@ PAGE = r"""<!doctype html>
     background:var(--sky)}
   button:active{background:var(--sky-d)}
   .hide{display:none!important}
-  .steps{text-align:left;margin:16px 0 0;padding:12px 14px 12px 32px;color:var(--muted);font-size:14px;line-height:1.55;
-    background:#eef8fe;border:1px solid #cfe8f9;border-radius:12px}
-  .steps li{margin:5px 0}.steps b{color:var(--ink)}
   .guide{text-align:left;margin:18px 0 0}
   .gt{font-weight:700;font-size:1.05rem;color:var(--ink);margin:0 0 4px}
   .gs{font-size:13.5px;line-height:1.5;margin:0 0 10px}
@@ -67,12 +64,6 @@ PAGE = r"""<!doctype html>
     <div class="icon" id="icon"></div>
     <h1 id="title">Please wait…</h1>
     <p id="text"></p>
-    <ol class="steps hide" id="steps">
-      <li>Turn off any ad blocker or "Block ads" feature</li>
-      <li>Settings → Network → <b>Private DNS</b> → set to <b>Off</b> / Automatic (AdGuard, NextDNS etc. block ads)</li>
-      <li>Turn off ad-blocking VPN / DNS apps (Blokada, AdGuard, DNS66…)</li>
-      <li>Then tap <b>Check again</b></li>
-    </ol>
     <div class="guide hide" id="guide">
       <div class="gt">How to turn off Private DNS</div>
       <p class="gs">Follow the pictures below. Menu names can look a little different on your phone.</p>
@@ -122,7 +113,6 @@ function ui(icon,title,text,o){
   o=o||{};
   $("title").textContent=title; $("text").textContent=text||"";
   $("spin").classList.toggle("hide",!o.spin);
-  $("steps").classList.toggle("hide",!o.steps);
   $("guide").classList.toggle("hide",!o.steps);
   $("sup").classList.toggle("hide",!(o.steps&&cfg.support));
   var b=$("btn"); b.classList.toggle("hide",!o.btn); if(o.btn) b.textContent=o.btn;
