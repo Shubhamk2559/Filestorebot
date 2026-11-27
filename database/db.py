@@ -72,7 +72,6 @@ DEFAULTS = {
     "db_channel": None,           # {"id": int, "title": str}
     "fsub_enabled": True,
     "fsub_channels": [],          # [{"id": int, "title": str, "link": str}], order = display order
-    "home_channel": None,         # {"id": int, "title": str, "link": str} - channel shown on the website main page
     "start_image": None,          # Telegram file_id
     "start_caption": DEFAULT_CAPTION,
     "custom_buttons": [],         # rows of [[text, url], ...]
@@ -101,6 +100,7 @@ DEFAULTS = {
     # ---- Backup (utils/backup.py)
     "auto_backup": True,          # send a backup file to the owner every 24 h
     "bk_last": 0,                 # time of the last backup
+    "lb_part_mb": 1536,           # Local Database Backup: size of one zip part in MB (utils/lbbackup.py)
 }
 
 
@@ -124,7 +124,7 @@ class SettingsCache:
 
     async def reset(self, keep=("admins", "db_channel", "ads_secret", "bk_last", "imgbb_key", "imgbb_keys", "telegraph_token",
                                                  "support_token", "support_username", "support_enabled", "support_group",
-                                                 "support_in_posts", "support_btn", "home_channel")):
+                                                 "support_in_posts", "support_btn", "lb_part_mb")):
         """Restore defaults but keep admins and the database channel."""
         kept = {k: self._data.get(k) for k in keep}
         fresh = copy.deepcopy(DEFAULTS)
