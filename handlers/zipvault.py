@@ -26,6 +26,7 @@ from handlers.upload import media_info
 from utils import autoposter as AP
 from utils import batch as BT
 from utils import keyboards as K
+from utils import progress as P
 from utils import zipvault as ZV
 from utils.keyboards import ub as U
 from utils.mtproto import mtproto
@@ -111,9 +112,21 @@ async def a_zvgo(update, context, args):
     for k in ("state", "zv_zips", "zv_cid", "zv_status"):
         ud.pop(k, None)
     await show(update, "⏳ <b>ZIP UPLOAD</b>\n\nSTARTED. THE STATUS IS IN THE NEXT MESSAGE.", K.back(f"apnew:{cid}"))
-    status = await update.effective_chat.send_message("⏳ STARTING…")
-    AP.spawn(_job(ZV.run_job(context.bot, cid, update.effective_user.id, zips, status.chat_id, status.message_id),
-                  context.bot, status.chat_id))
+    job_id = db.new_token()[:10]
+    status = await update.effective_chat.send_message("⏳ STARTING…", reply_markup=ZV._stop_kb(job_id))
+    P.JOBS[job_id] = {"cid": cid, "by": update.effective_user.id, "ids": [], "cancelled": False, "task": None}
+    task = AP.spawn(_job(ZV.run_job(context.bot, cid, update.effective_user.id, zips, status.chat_id,
+                                    status.message_id, job_id), context.bot, status.chat_id))
+    P.JOBS[job_id]["task"] = task
+
+
+@action("zvcancel")
+async def a_zvcancel(update, context, args):
+    """🛑 Stop button of the live ZIP status message."""
+    job = P.JOBS.get(args[0])
+    cid = job["cid"] if job else None
+    text = await ZV.cancel_job(args[0])
+    await show(update, f"🛑 <b>ZIP UPLOAD</b>\n\n{text}", K.back(f"apnew:{cid}" if cid is not None else "ap"))
 
 
 # ===================================================================== (2) thumbnails
