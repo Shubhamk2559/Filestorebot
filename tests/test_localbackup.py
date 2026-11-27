@@ -7,6 +7,7 @@ idempotent re-run, a corrupted file, captions / kinds / link order / links resol
 """
 import asyncio
 import copy
+import hashlib
 import io
 import json
 import os
@@ -382,7 +383,7 @@ def seed():
 
 async def wait(runner_):
     if runner_.task:
-        await asyncio.wait_for(asyncio.shield(runner_.task), 60)
+        await asyncio.wait_for(asyncio.shield(runner_.task), float(os.getenv("T_WAIT","60")))
 
 
 # ------------------------------------------------------------------ pure unit tests
@@ -611,8 +612,307 @@ async def scenario():
     check(R.job["status"] == "done" and len(R.job["parts"]) == R.job["total_parts"], "resume finishes the remaining parts")
 
 
+# ------------------------------------------------------------------ parallel downloader
+LBM = sys.modules["utils.lbclient"]                    # the module (tests change its tuning constants)
+
+
+class FileReferenceExpired(Exception):                 # same class name as Pyrogram's
+    pass
+
+
+class SlowClient(FakeClient):
+    """FakeClient with per-call latency that makes later files finish BEFORE earlier ones, a call log, a byte counter
+    (bytes served - bytes written = what sits in RAM), expiring file references and files that always fail."""
+
+    def __init__(self, store):
+        super().__init__(store)
+        self.ver = {m: 0 for m in store}
+        self.expire_once = set()
+        self.always_fail = set()
+        self.calls, self.done_order, self.msg_calls = [], [], []
+        self.cur = self.peak = 0
+        self.served = 0
+        self.ram_peak = 0
+        self.written = [0]
+        self.thumbs_done = 0
+
+    async def get_messages(self, chat, ids):
+        ids = [ids] if isinstance(ids, int) else list(ids)
+        self.msg_calls.append(list(ids))
+        out = await super().get_messages(chat, ids)
+        res = []
+        for m in out:
+            m2 = types.SimpleNamespace(**vars(m))
+            m2.ref = self.ver.get(m2.id, 0)
+            res.append(m2)
+        return res
+
+    async def stream_media(self, msg, limit=0, offset=0):
+        mid = msg.id
+        self.cur += 1
+        self.peak = max(self.peak, self.cur)
+        self.calls.append((mid, offset, limit))
+        try:
+            if mid in self.expire_once:
+                self.expire_once.discard(mid)
+                self.ver[mid] += 1
+                await asyncio.sleep(0.002)
+                raise FileReferenceExpired("[400 FILE_REFERENCE_EXPIRED]")
+            if getattr(msg, "ref", 0) != self.ver.get(mid, 0):
+                await asyncio.sleep(0.002)
+                raise FileReferenceExpired("[400 FILE_REFERENCE_EXPIRED]")
+            if mid in self.always_fail:
+                await asyncio.sleep(0.002)
+                raise IOError("simulated broken file")
+            await asyncio.sleep(0.004 * (30 - mid % 30) / 30 + 0.003 * ((offset * 7 + mid) % 4))   # later files are faster
+            data = msg.data
+            part = data[offset * C.MiB:(offset + limit) * C.MiB] if limit else data
+            pieces = [part[i:i + C.MiB] for i in range(0, len(part), C.MiB)] or [b""]
+            for pc in pieces:
+                self.served += len(pc)
+                self.ram_peak = max(self.ram_peak, self.served - self.written[0])
+                yield pc
+            self.done_order.append((mid, offset))
+        finally:
+            self.cur -= 1
+
+    async def download_media(self, fid, in_memory=False):
+        await asyncio.sleep(0.003)
+        self.thumbs_done += 1
+        return await super().download_media(fid, in_memory)
+
+
+def seed_many():
+    """18 files: tiny, medium and multi-stripe ones; some with thumbnails; the link order is NOT the message-id order."""
+    store, ids = {}, []
+    sizes = [300_000, 3 * C.MiB + 17, 40_000, C.MiB, 4 * C.MiB + 5, 100_000, 2 * C.MiB + 1, 20_000, 2 * C.MiB,
+             650_000, 1, 5 * C.MiB + 3, 10_000, C.MiB + 700, 800_000, 5_000, 3 * C.MiB, 123_457]
+    for n, size in enumerate(sizes):
+        mid = 1000 + n * 3
+        kind = "video" if n % 3 == 0 else "document"
+        store[mid] = mk_msg(mid, kind, os.urandom(size), f"cap {n}\n\n<code>FSB:PTOKEN{n // 6:06d}00:{n % 6}</code>",
+                            name=f"f{n}.bin", thumb=(b"THUMB%d" % n) if n % 3 == 0 else None, duration=3)
+        ids.append(mid)
+    links = [{"_id": f"PTOKEN{t:06d}00", "ids": ids[t * 6:(t + 1) * 6], "creator": 5, "label": f"L{t}",
+              "created": float(t), "views": 0} for t in range(3)]
+    files = [{"_id": f"p{n}", "msg_id": mid, "kind": "document", "name": f"f{n}.bin", "by": 5, "date": float(n),
+              "code": f"FSB:PTOKEN{n // 6:06d}00:{n % 6}", "cap": f"cap {n}"} for n, mid in enumerate(ids)]
+    return store, links, files
+
+
+def reset_db(links, files):
+    for name in list(FDB.cols):
+        FDB.cols[name].docs = {}
+    FDB["links"].docs = {d["_id"]: copy.deepcopy(d) for d in links}
+    FDB["files"].docs = {d["_id"]: copy.deepcopy(d) for d in files}
+    FDB["settings"].docs = {"main": {"_id": "main", "protect": True, "db_channel": {"id": OLD_CHAN, "title": "old"}}}
+
+
+def zip_view(path):
+    """(entry names in order, {name: bytes}, manifest) of one delivered part."""
+    zf = zipfile.ZipFile(path)
+    names = zf.namelist()
+    skip = ("manifest.json", C.MONGO_ENTRY)               # the Mongo export carries ids / times that differ per run
+    return names, {n: zf.read(n) for n in names if n not in skip}, json.loads(zf.read("manifest.json"))
+
+
+async def run_backup(client, bot):
+    """One complete backup with the current tuning; returns {part name: zip_view} read from the owner's inbox."""
+    inbox = os.path.join(TMP, "owner_inbox")
+    shutil.rmtree(inbox, ignore_errors=True)
+    client.owner_docs.clear()
+    R = lbbackup.runner
+    await R.start_scan(bot, 1, 2)
+    await wait(R)
+    check(R.job["status"] == "ready", f"scan status {R.job['status']} {R.job.get('error')}")
+    client.msg_calls.clear()
+    await R.start(bot)
+    await wait(R)
+    check(R.job["status"] == "done", f"parallel backup status {R.job['status']} {R.job.get('error')}")
+    return {p["name"]: zip_view(os.path.join(inbox, p["name"])) for p in R.job["parts"]}
+
+
+async def parallel():
+    print("parallel downloader…")
+    store, links, files = seed_many()
+    reset_db(links, files)
+    client = SlowClient(store)
+
+    async def acquire():
+        return client
+
+    lbclient.acquire, lbclient.release = acquire, AsyncMock()
+    lbbackup.part_limit = lambda: 8 * C.MiB
+    S._data["db_channel"] = {"id": OLD_CHAN, "title": "old"}
+    bot = fake_bot()
+    R = lbbackup.runner
+
+    real_write = C.Entry.write
+
+    def counting_write(self, b):
+        client.written[0] += len(b)
+        return real_write(self, b)
+    C.Entry.write = counting_write
+
+    keep = {k: getattr(LBM, k) for k in ("FILES", "TRANSFERS", "STRIPE", "BUFFER_MB", "WRITE_MB")}
+    try:
+        # ---- reference: strictly one file / one request at a time
+        LBM.FILES, LBM.TRANSFERS, LBM.STRIPE, LBM.BUFFER_MB, LBM.WRITE_MB = 1, 1, 1, 128, 1
+        ref = await run_backup(client, bot)
+        ref_peak_calls = client.peak
+        check(ref_peak_calls == 1, f"reference run is sequential (peak {ref_peak_calls})")
+        ref_names = list(ref)
+        check(len(ref) >= 3, f"several parts in the reference run: {len(ref)}")
+        check(os.listdir(lbpaths.tmp_dir()) == [], "temp folder empty after the reference run")
+
+        # ---- parallel, out of order, tiny buffer (smaller than 2 stripes): RAM must stay under it
+        for cfg in ((5, 8, 2, 6, 4), (6, 16, 1, 3, 1)):     # files, transfers, stripe MiB, buffer MiB, write MiB
+            client.calls.clear(), client.done_order.clear()
+            client.peak = client.cur = client.served = client.ram_peak = 0
+            client.written[0] = 0
+            client.thumbs_done = 0
+            LBM.FILES, LBM.TRANSFERS, LBM.STRIPE, LBM.BUFFER_MB, LBM.WRITE_MB = cfg
+            got = await run_backup(client, bot)
+            tag = f"files={cfg[0]} transfers={cfg[1]} stripe={cfg[2]} buffer={cfg[3]}MiB"
+            check(list(got) == ref_names, f"[{tag}] same parts {list(got)} vs {ref_names}")
+            for name in ref_names:
+                n1, d1, m1 = ref[name]
+                n2, d2, m2 = got.get(name, ([], {}, {"files": []}))
+                check(n1 == n2, f"[{tag}] {name}: zip entry ORDER differs")
+                check(d1 == d2, f"[{tag}] {name}: zip contents differ")
+                f1 = [(f["key"], f["path"], f["size"], f["sha256"], f["msg_id"]) for f in m1["files"]]
+                f2 = [(f["key"], f["path"], f["size"], f["sha256"], f["msg_id"]) for f in m2["files"]]
+                check(f1 == f2, f"[{tag}] {name}: manifest files / order differ")
+                for f in m2["files"]:
+                    check(hashlib.sha256(d2[f["path"]]).hexdigest() == f["sha256"], f"[{tag}] sha256 of {f['path']}")
+                    check(d2[f["path"]] == store[f["msg_id"]].data, f"[{tag}] bytes of {f['path']} differ from the channel")
+                    if f["thumb"]:
+                        check(d2[f["thumb"]["path"]] == store[f["msg_id"]].thumb, f"[{tag}] thumb of {f['path']}")
+                check([f.get("thumb") is not None for f in m1["files"]] == [f.get("thumb") is not None for f in m2["files"]],
+                      f"[{tag}] thumbnails differ")
+            check(client.peak > 1, f"[{tag}] downloads really overlap (peak {client.peak})")
+            # out of order: some stripe of a LATER file completed before an earlier file's last stripe
+            order = {m: i for i, m in enumerate(sorted({c[0] for c in client.calls}))}
+            seq = [order[m] for m, _ in client.done_order]
+            check(seq != sorted(seq), f"[{tag}] stripes completed out of order {seq[:12]}")
+            check(client.thumbs_done >= 6, f"[{tag}] thumbnails fetched ({client.thumbs_done})")
+            # RAM: peak accounted by the prefetcher AND bytes served-but-not-written seen from outside
+            buf = cfg[3] * C.MiB
+            st = R.last_stats
+            check(st.get("peak_buffer", 1 << 60) <= max(buf, cfg[2] * C.MiB), f"[{tag}] accounted peak {st.get('peak_buffer')} > {buf}")
+            check(client.ram_peak <= max(buf, cfg[2] * C.MiB) + cfg[4] * C.MiB, f"[{tag}] RAM in flight {client.ram_peak} > {buf} + block")
+            check(st.get("peak_files", 99) <= cfg[0], f"[{tag}] open files {st.get('peak_files')} > {cfg[0]}")
+            check(st.get("peak_inflight", 99) <= cfg[1], f"[{tag}] in-flight {st.get('peak_inflight')} > {cfg[1]}")
+            check(client.peak <= cfg[1], f"[{tag}] client saw {client.peak} calls at once, limit {cfg[1]}")
+            # batched messages: ONE get_messages per part (ids of the whole part), no per-file calls
+            singles = [c for c in client.msg_calls if len(c) == 1]
+            check(not singles and all(len(c) > 1 for c in client.msg_calls) and len(client.msg_calls) == len(ref_names),
+                  f"[{tag}] get_messages calls {[len(c) for c in client.msg_calls]}")
+            check(os.listdir(lbpaths.tmp_dir()) == [], f"[{tag}] temp folder empty")
+
+        # ---- FILE_REFERENCE_EXPIRED: only the affected message is read again, once
+        LBM.FILES, LBM.TRANSFERS, LBM.STRIPE, LBM.BUFFER_MB, LBM.WRITE_MB = 4, 8, 1, 16, 4
+        target = 1000 + 4 * 3                                       # the 4 MiB file: several stripes fail together
+        client.expire_once = {target}
+        got = await run_backup(client, bot)
+        refresh = [c for c in client.msg_calls if len(c) == 1]
+        check(refresh == [[target]], f"exactly one single-message refresh, got {refresh}")
+        check(all(got[n][1] == ref[n][1] and got[n][0] == ref[n][0] for n in ref_names), "zip identical after a reference refresh")
+
+        # ---- a file that always fails: reported, everything else intact, temp folder clean
+        real_sleep = asyncio.sleep
+
+        async def fast_sleep(t, *a):                       # retry back-offs (0.5 - 6 s) are skipped, the 4 s ticker is not
+            return await real_sleep(0 if (t >= 0.4 and t != 4) else t)
+        asyncio.sleep = fast_sleep
+        try:
+            bad = 1000 + 6 * 3
+            client.always_fail = {bad}
+            got = await run_backup(client, bot)
+        finally:
+            asyncio.sleep = real_sleep
+        client.always_fail = set()
+        stored = {f["msg_id"] for n in got for f in got[n][2]["files"]}
+        check(bad not in stored and len(stored) == len(store) - 1, f"failing file is not in any manifest ({len(stored)} stored)")
+        check(any(x["msg_id"] == bad for x in R.job["skipped"]), "failing file is listed as not backed up")
+        okfiles = {f["msg_id"]: f for n in got for f in got[n][2]["files"]}
+        check(all(okfiles[m]["sha256"] == hashlib.sha256(store[m].data).hexdigest() for m in okfiles), "all other files intact")
+        check(os.listdir(lbpaths.tmp_dir()) == [], "temp folder empty after a failed file")
+    finally:
+        C.Entry.write = real_write
+        for k, v in keep.items():
+            setattr(LBM, k, v)
+
+
+async def client_diag():
+    """The dedicated client reports what it really got; the silent fallbacks are loud now."""
+    print("client diagnostics…")
+    from utils.lbclient import LBClient
+    from utils import mtproto as MT
+    started = []
+
+    class NoOpt:                                       # old build: no max_concurrent_transmissions, semaphore of 1
+        def __init__(self, name, api_id, api_hash, bot_token, in_memory, no_updates, sleep_threshold):
+            self.get_file_semaphore = asyncio.Semaphore(1)
+
+        async def start(self):
+            started.append(self)
+
+        async def stop(self):
+            started.remove(self)
+
+    class WithOpt(NoOpt):
+        def __init__(self, name, max_concurrent_transmissions=1, **kw):
+            super().__init__(name, **kw)
+            self.get_file_semaphore = asyncio.Semaphore(max_concurrent_transmissions)
+
+    class Broken(NoOpt):
+        async def start(self):
+            raise ConnectionError("no route to Telegram")
+
+    pyro = sys.modules["pyrogram"]
+    keep = getattr(pyro, "Client", None), MT.mtproto.client
+    try:
+        for cls, label in ((NoOpt, "option missing"), (WithOpt, "option ok")):
+            pyro.Client = cls
+            lb = LBClient()
+            c = await lb.acquire()
+            check(lb.dedicated and lb.eff == LBM.TRANSFERS, f"[{label}] semaphore raised to {lb.eff}")
+            check(c.get_file_semaphore._value == LBM.TRANSFERS, f"[{label}] semaphore value {c.get_file_semaphore._value}")
+            pool = await lb.pool(c, 3)
+            check(len(pool) == 3 and len(started) == 3, f"[{label}] pool of 3 clients ({len(pool)})")
+            check(lb.effective_transfers(3) == min(LBM.TRANSFERS, LBM.TRANSFERS * 3), "effective transfers")
+            await lb.release()
+            check(not started and lb.client is None and not lb.extras, f"[{label}] every client stopped")
+        # dedicated client cannot start -> shared session: WARNING for the panel, effective transfers from the real semaphore
+        pyro.Client = Broken
+        MT.mtproto.client = types.SimpleNamespace(get_file_semaphore=asyncio.Semaphore(1))
+        lb = LBClient()
+        c = await lb.acquire()
+        check(c is MT.mtproto.client and not lb.dedicated and lb.eff == 1, f"shared fallback eff={lb.eff}")
+        check(any("SHARED" in w for w in lb.warnings), f"shared fallback warns: {lb.warnings}")
+        check(lb.effective_transfers(1) == 1 and (await lb.pool(c, 3)) == [c], "shared session: 1 transfer, no extra clients")
+        await lb.release()
+        check(lb.warnings == [] and lb.mode == "", "state reset after release")
+        MT.mtproto.client = None
+        lb = LBClient()
+        try:
+            await lb.acquire()
+            check(False, "no MTProto at all must raise")
+        except RuntimeError:
+            pass
+    finally:
+        if keep[0] is None:
+            del pyro.Client
+        else:
+            pyro.Client = keep[0]
+        MT.mtproto.client = keep[1]
+
+
 unit()
 asyncio.run(scenario())
+asyncio.run(parallel())
+asyncio.run(client_diag())
 shutil.rmtree(TMP, ignore_errors=True)
 print("FAILED:\n" + "\n".join(fails) if fails else "ALL LOCAL BACKUP TESTS PASSED")
 sys.exit(1 if fails else 0)
