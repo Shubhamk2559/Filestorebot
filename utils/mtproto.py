@@ -10,6 +10,7 @@ admin-side features that must read channel history, which the Bot API cannot do:
 Needs API_ID + API_HASH. Without them the bot still works fully (forwarding), only those two features are off.
 """
 import logging
+import os
 
 import config
 
@@ -39,7 +40,13 @@ class MTProto:
         try:
             # Created inside the running loop on purpose (Pyrogram binds to the current loop).
             client = Client("mtproto", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN,
-                            in_memory=True, no_updates=True, sleep_threshold=60)
+                            in_memory=True, no_updates=True, sleep_threshold=60,
+                            # parallel chunk transfers = the big speed-up for download / upload (default is 1)
+                            max_concurrent_transmissions=int(os.getenv("MTPROTO_PARALLEL", "8") or 8))
+            try:
+                import tgcrypto  # noqa: F401
+            except ImportError:
+                log.warning("tgcrypto is NOT installed -> MTProto is 5-10x slower. pip install tgcrypto")
             await client.start()
             self.client = client
             self.error = ""

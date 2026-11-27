@@ -27,6 +27,7 @@ import html
 import json
 import logging
 import random
+import os
 import re
 import time
 
@@ -43,7 +44,8 @@ IMGBB_URL = PV.IMGBB_URL
 TELEGRAPH = PV.TELEGRAPH
 _TIMEOUT = aiohttp.ClientTimeout(total=90)
 
-CD_MIN, CD_MAX = 5, 15              # seconds between two imgbb uploads (random)
+CD_MIN = float(os.getenv("IMGBB_CD_MIN", "1"))      # seconds between two imgbb uploads of ONE worker (random)
+CD_MAX = max(CD_MIN, float(os.getenv("IMGBB_CD_MAX", "3")))
 KEY_COOLDOWN = 30 * 60              # a key that failed rests this long
 RETRY_WAIT = 10 * 60                # a batch that could not go on (all keys down ...) is retried after this
 DEFAULT_GAP_DAYS = 30               # min. days between two posts of the SAME folder

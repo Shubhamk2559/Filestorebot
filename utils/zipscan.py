@@ -55,7 +55,7 @@ def _fix_name(info: zipfile.ZipInfo) -> str:
     return n.replace("\\", "/")
 
 
-def extract(zip_path: str, dest: str) -> int:
+def extract(zip_path: str, dest: str, progress=None) -> int:
     """Extract every file of the ZIP into dest. Returns the number of files. Raises a readable error on a bad ZIP."""
     dest = os.path.realpath(dest)
     os.makedirs(dest, exist_ok=True)
@@ -64,6 +64,7 @@ def extract(zip_path: str, dest: str) -> int:
     except zipfile.BadZipFile:
         raise RuntimeError("not a valid ZIP file (RAR / 7z are not supported)")
     n = 0
+    done = 0
     with z:
         need = sum(i.file_size for i in z.infolist())
         free = shutil.disk_usage(dest).free
@@ -78,7 +79,14 @@ def extract(zip_path: str, dest: str) -> int:
             os.makedirs(os.path.dirname(target), exist_ok=True)
             try:
                 with z.open(info) as src, open(target, "wb") as out:
-                    shutil.copyfileobj(src, out, 1024 * 1024)
+                    while True:
+                        chunk = src.read(4 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        done += len(chunk)
+                        if progress:
+                            progress(done, need, n + 1)
             except RuntimeError as e:
                 raise RuntimeError("the ZIP is password protected" if "password" in str(e).lower() else str(e))
             n += 1

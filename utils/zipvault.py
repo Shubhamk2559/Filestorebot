@@ -36,6 +36,7 @@ from database import db
 from database.db import settings as S
 from utils import autoposter as AP
 from utils import batch as BT
+from utils import progress as P
 from utils import zipscan as ZS
 from utils.helpers import call
 from utils.keyboards import ub
@@ -46,8 +47,10 @@ log = logging.getLogger(__name__)
 
 BOT_API_MAX_SEND = 50 * 1024 * 1024        # Bot API upload limit (only used when the MTProto session is off)
 BOT_API_MAX_GET = 20 * 1024 * 1024         # Bot API download limit
+IMG_PARALLEL = max(1, int(os.getenv("IMG_PARALLEL", "4") or 4))   # imgbb uploads running at the same time
 MAX_IMG_TRIES = 3                          # an image that keeps failing (not a key problem) is skipped after this
 ACTIVE = ["pending", "working", "waiting"]
+LIVE: dict = {}                            # channel id -> what the worker is doing right now (shown in the status message)
 
 
 class Lost(RuntimeError):
@@ -75,84 +78,185 @@ async def _download(bot, z: dict, dest: str, progress):
         raise RuntimeError("download failed")
 
 
-async def queue_zip_folders(cid: int, folders: list, by: int, root: str, zip_name: str) -> int:
-    """One resumable job per folder that has at least one image. Nothing is uploaded here."""
-    n = 0
+async def queue_zip_folders(cid: int, folders: list, by: int, root: str, zip_name: str) -> list:
+    """One resumable job per folder that has at least one image. Nothing is uploaded here. Returns the new job ids."""
+    ids = []
     t0 = time.time()
     for i, f in enumerate(folders):
         if not f["images"]:
             continue
+        bid = db.new_token()
         await db.ap_batches_col.insert_one({
-            "_id": db.new_token(), "chan": cid, "name": f["name"], "by": by, "status": "pending", "src": "zip",
+            "_id": bid, "chan": cid, "name": f["name"], "by": by, "status": "pending", "src": "zip",
             "dir": root, "zip": zip_name,
             "imgs": [{"rel": r} for r in f["images"]], "vids": [{"rel": r} for r in f["videos"]],
             "items": [], "img_urls": {}, "img_failed": [], "img_tries": {}, "stored": [], "vtoken": None,
             "tg_url": None, "next_try": 0, "error": "", "created": t0 + i * 0.001})
-        n += 1
-    return n
+        ids.append(bid)
+    return ids
 
 
-async def run_job(bot, cid: int, by: int, zips: list, chat_id: int, msg_id: int):
-    """Download + extract + scan every ZIP, queue the folders. The heavy part (imgbb / videos) is done by the worker."""
-    last = [0.0]
+def _stop_kb(job_id: str):
+    return M([[ub("🛑 Stop", f"adm:zvcancel:{job_id}")]])
+
+
+def _job_kb(cid: int):
+    return M([[ub("🖼 Thumbnails", f"adm:zvthumb:{cid}")], [ub("🔙 Back", f"adm:apnew:{cid}")]])
+
+
+# ------------------------------------------------------------------ live status of the worker
+async def work_text(cid: int, ids: list) -> str:
+    total = len(ids)
+    active = await db.ap_batches_col.count_documents({"_id": {"$in": ids}, "status": {"$in": ACTIVE}})
+    head = f"⚙️ <b>ZIP UPLOAD · PROCESSING</b>\n\n📂 FOLDERS ▸ <b>{total - active}/{total}</b> DONE\n"
+    live = LIVE.get(cid)
+    if not live or live.get("bid") not in ids or time.time() - live.get("ts", 0) > 180:
+        w = await db.ap_batches_col.find_one({"_id": {"$in": ids}, "status": "waiting"})
+        if w:
+            return (head + f"\n⏳ PAUSED ON “{html.escape(w['name'])}”. RETRY IN A FEW MINUTES.\n"
+                    f"<code>{html.escape((w.get('error') or '')[:150])}</code>")
+        return head + "\n⏳ WAITING FOR THE NEXT FOLDER…"
+    t = head + (f"\n▶️ NOW ▸ <b>{html.escape(live['name'][:40])}</b>\n"
+                f"🎬 VIDEOS ▸ <b>{live['v_done']}/{live['v_tot']}</b> · 🖼 IMAGES ▸ <b>{live['i_done']}/{live['i_tot']}</b>\n\n")
+    st = live["stage"]
+    if st == "videos":
+        t += f"🎬 UPLOADING VIDEO TO CHANNEL\n{live['file'][:40]}\n" + live["tr"].card()
+    elif st == "images":
+        it = live["itr"]
+        sp = it.speed
+        t += (f"🖼 UPLOADING IMAGES (imgbb)\n{P.bar(it.pct)} <b>{it.pct:.0f}%</b>\n"
+              f"⚡ {sp:.1f} IMG/S · ⏱ ETA {P.clock(it.eta) if sp else '--'} · 🕐 {P.clock(it.elapsed)}")
+    else:
+        t += "📝 CREATING THE TELEGRAPH PAGE…"
+    return t
+
+
+async def cancel_job(job_id: str) -> str:
+    """🛑 Stop: kills the download / unpack, cancels every queued folder of the job and removes its files."""
+    job = P.JOBS.get(job_id)
+    if not job:
+        return "NOTHING IS RUNNING ANY MORE."
+    job["cancelled"] = True
+    cid = job["cid"]
+    ids = list(job["ids"])
+    if LIVE.get(cid) and LIVE[cid].get("bid") in ids:
+        LIVE[cid]["cancel"] = True                     # the running upload stops at the next chunk
+    if ids:
+        dirs = {d["dir"] async for d in db.ap_batches_col.find({"_id": {"$in": ids}}, {"dir": 1}) if d.get("dir")}
+        await db.ap_batches_col.update_many({"_id": {"$in": ids}, "status": {"$in": ACTIVE + ["need_thumb"]}},
+                                            {"$set": {"status": "cancelled", "error": "stopped by admin"}})
+        for d in dirs:
+            shutil.rmtree(d, ignore_errors=True)
+    task = job.get("task")
+    if task and not task.done():
+        task.cancel()
+    return f"🛑 STOPPED. {len(ids)} QUEUED FOLDER(S) CANCELLED, TEMP FILES REMOVED."
+
+
+async def run_job(bot, cid: int, by: int, zips: list, chat_id: int, msg_id: int, job_id: str = ""):
+    """Download + extract + scan every ZIP, queue the folders, then show the live status of the worker."""
+    job = P.JOBS.setdefault(job_id, {"cid": cid, "by": by, "ids": [], "cancelled": False, "task": None})
+    tr = P.Tracker()
+    st = {"stage": "start", "tag": "", "z": None}
     lines: list = []
     errors: list = []
     queued = skipped_nophoto = ignored = 0
+    t_start = time.time()
 
-    async def say(text: str, force: bool = False, final: bool = False):
-        if not force and time.time() - last[0] < 3:
-            return
-        last[0] = time.time()
+    def render() -> str:
+        z = st["z"]
+        head = "📦 <b>ZIP UPLOAD</b>\n\n"
+        if not z:
+            return head + "⏳ STARTING…"
+        what = {"download": "⬇️ DOWNLOADING", "unpack": "📂 UNPACKING"}.get(st["stage"], "⏳")
+        return (head + f"{what} {st['tag']}\n📄 {html.escape(z['name'][:40])} ({P.size(z['size'])})\n\n" + tr.card())
+
+    async def edit(text: str, markup):
         try:
             await bot.edit_message_text(styled(text), chat_id=chat_id, message_id=msg_id,
-                                        reply_markup=_job_kb(cid) if final else None, parse_mode=ParseMode.HTML)
-        except Exception:
+                                        reply_markup=markup, parse_mode=ParseMode.HTML)
+        except Exception:                               # "message is not modified", flood limits ...
             pass
 
+    async def reporter():
+        while True:
+            await asyncio.sleep(2.5)
+            text = await work_text(cid, job["ids"]) if st["stage"] == "work" else render()
+            await edit(text, _stop_kb(job_id))
+
+    rep = asyncio.ensure_future(reporter())
     wd = ZS.work_dir()
-    for zi, z in enumerate(zips, 1):
-        tag = f"{zi}/{len(zips)}"
-        root = os.path.join(wd, db.new_token())
-        zpath = root + ".zip"
-        try:
-            await say(f"📦 <b>ZIP UPLOAD</b>\n\n⬇️ DOWNLOADING {tag}: {html.escape(z['name'])} ({_size(z['size'])})", True)
-
-            async def prog(cur, tot, _t=tag, _z=z):
-                pct = int(cur * 100 / tot) if tot else 0
-                await say(f"📦 <b>ZIP UPLOAD</b>\n\n⬇️ DOWNLOADING {_t}: {html.escape(_z['name'])} — {pct}%")
-
-            await _download(bot, z, zpath, prog)
-            await say(f"📦 <b>ZIP UPLOAD</b>\n\n📂 UNPACKING {tag}: {html.escape(z['name'])}", True)
-            count = await asyncio.to_thread(ZS.extract, zpath, root)
-            loose = Path(z["name"]).stem or "Folder"        # loose files in the ZIP root -> a folder named like the ZIP
-            folders = await asyncio.to_thread(ZS.scan_dir, root, loose)
-            ok = await queue_zip_folders(cid, folders, by, root, z["name"])
-            skipped_nophoto += sum(1 for f in folders if not f["images"])
-            ignored += sum(f["ignored"] for f in folders)
-            queued += ok
-            for f in folders:
-                if f["images"]:
-                    lines.append(f"• {html.escape(f['name'][:30])} — 🖼 {len(f['images'])} · 🎬 {len(f['videos'])}")
-            if not ok:
-                shutil.rmtree(root, ignore_errors=True)
-            log.info("ZIP %s: %s files, %s folders queued", z["name"], count, ok)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            log.warning("ZIP %s failed: %s: %s", z.get("name"), type(e).__name__, e)
-            errors.append(f"{html.escape(z['name'][:30])}: {html.escape(str(e)[:120])}")
-            shutil.rmtree(root, ignore_errors=True)
-        finally:
+    try:
+        for zi, z in enumerate(zips, 1):
+            st.update(stage="download", tag=f"{zi}/{len(zips)}", z=z)
+            tr.reset()
+            tr.tot = z["size"]
+            root = os.path.join(wd, db.new_token())
+            zpath = root + ".zip"
             try:
-                os.remove(zpath)                      # the ZIP itself is not needed any more -> disk space back
-            except OSError:
-                pass
+                await edit(render(), _stop_kb(job_id))
 
+                async def prog(cur, tot):                # cheap: only stores the numbers, the reporter shows them
+                    tr.update(cur, tot)
+
+                await _download(bot, z, zpath, prog)
+                st["stage"] = "unpack"
+                tr.reset()
+                tr.tot = os.path.getsize(zpath)
+                await edit(render(), _stop_kb(job_id))
+                count = await asyncio.to_thread(ZS.extract, zpath, root, lambda d, t, n: tr.update(d, t))
+                loose = Path(z["name"]).stem or "Folder"      # loose files in the ZIP root -> a folder named like the ZIP
+                folders = await asyncio.to_thread(ZS.scan_dir, root, loose)
+                ids = await queue_zip_folders(cid, folders, by, root, z["name"])
+                job["ids"].extend(ids)
+                skipped_nophoto += sum(1 for f in folders if not f["images"])
+                ignored += sum(f["ignored"] for f in folders)
+                queued += len(ids)
+                for f in folders:
+                    if f["images"]:
+                        lines.append(f"• {html.escape(f['name'][:30])} — 🖼 {len(f['images'])} · 🎬 {len(f['videos'])}")
+                if not ids:
+                    shutil.rmtree(root, ignore_errors=True)
+                if ids:
+                    st["stage"] = "work"                 # the worker starts on the first folder while the next ZIP downloads
+                log.info("ZIP %s: %s files, %s folders queued", z["name"], count, len(ids))
+            except asyncio.CancelledError:
+                shutil.rmtree(root, ignore_errors=True)
+                raise
+            except Exception as e:
+                log.warning("ZIP %s failed: %s: %s", z.get("name"), type(e).__name__, e)
+                errors.append(f"{html.escape(z['name'][:30])}: {html.escape(str(e)[:120])}")
+                shutil.rmtree(root, ignore_errors=True)
+            finally:
+                try:
+                    os.remove(zpath)                      # the ZIP itself is not needed any more -> disk space back
+                except OSError:
+                    pass
+
+        st["stage"] = "work" if queued else "end"
+        while queued:                                     # follow the worker until every folder of this job is done
+            left = await db.ap_batches_col.count_documents({"_id": {"$in": job["ids"]}, "status": {"$in": ACTIVE}})
+            if not left:
+                break
+            await asyncio.sleep(3)
+    except asyncio.CancelledError:
+        rep.cancel()
+        await edit("🛑 <b>ZIP UPLOAD</b>\n\nSTOPPED. TEMP FILES REMOVED.", M([[ub("🔙 Back", f"adm:apnew:{cid}")]]))
+        raise
+    finally:
+        rep.cancel()
+        P.JOBS.pop(job_id, None)
+
+    took = P.clock(time.time() - t_start)
     if queued:
-        text = (f"✅ <b>ZIP UPLOAD</b>\n\n<b>{queued}</b> FOLDER(S) QUEUED.\n"
-                "THE BOT NOW UPLOADS THE IMAGES (imgbb → TELEGRAPH) AND THE VIDEOS (ONE LINK PER FOLDER).\n"
-                "WHEN THE LINKS ARE READY YOU GET A MESSAGE WITH A 🖼 THUMBNAILS BUTTON.\n\n"
+        c = db.ap_batches_col
+        failed = await c.count_documents({"_id": {"$in": job["ids"]}, "status": "failed"})
+        ready = queued - failed
+        text = (f"✅ <b>ZIP UPLOAD</b>\n\n<b>{ready}</b> OF {queued} FOLDER(S) READY ⏱ {took}.\n"
+                "TAP 🖼 THUMBNAILS TO CHOOSE THE THUMBNAIL OF EACH FOLDER.\n\n"
                 + "\n".join(lines[:12]) + (f"\n… +{len(lines) - 12} MORE" if len(lines) > 12 else ""))
+        if failed:
+            text += f"\n⚠️ FAILED: {failed} (SEND THEIR ZIP AGAIN)"
     else:
         text = "⚠️ <b>ZIP UPLOAD</b>\n\nNO FOLDER WITH IMAGES FOUND."
     if skipped_nophoto:
@@ -161,15 +265,11 @@ async def run_job(bot, cid: int, by: int, zips: list, chat_id: int, msg_id: int)
         text += f"\n⏭ IGNORED FILES (NOT IMAGE / VIDEO): {ignored}"
     for e in errors:
         text += f"\n⚠️ {e}"
-    await say(text, True, True)
-
-
-def _job_kb(cid: int):
-    return M([[ub("🖼 Thumbnails", f"adm:zvthumb:{cid}")], [ub("🔙 Back", f"adm:apnew:{cid}")]])
+    await edit(text, _job_kb(cid))
 
 
 # ------------------------------------------------------------------ worker step (called from BT._process)
-async def store_video(bot, channel_id: int, path: str, name: str, code: str, by: int) -> int:
+async def store_video(bot, channel_id: int, path: str, name: str, code: str, by: int, progress=None) -> int:
     """A video / file from disk -> Database Channel under a backup code. Returns the channel message id."""
     ext = Path(path).suffix.lower()
     kind = "video" if ext in ZS.STREAMABLE else "document"
@@ -183,10 +283,10 @@ async def store_video(bot, channel_id: int, path: str, name: str, code: str, by:
             await c.get_chat(channel_id)                      # make sure the channel peer is known to this session
             if kind == "video":
                 m = await c.send_video(channel_id, path, caption=cap, parse_mode=enums.ParseMode.HTML,
-                                       supports_streaming=True, file_name=name, thumb=thumb, **meta)
+                                       supports_streaming=True, file_name=name, thumb=thumb, progress=progress, **meta)
             else:
                 m = await c.send_document(channel_id, path, caption=cap, parse_mode=enums.ParseMode.HTML,
-                                          file_name=name, force_document=True)
+                                          file_name=name, force_document=True, progress=progress)
             mid = m.id
         else:
             if os.path.getsize(path) > BOT_API_MAX_SEND:
@@ -248,6 +348,16 @@ async def _telegraph(session, title: str, urls: list) -> str:
     return nxt
 
 
+async def _save(bid: str, **f):
+    """Like BT._set, but never brings a folder back to life after the admin pressed 🛑 Stop."""
+    await db.ap_batches_col.update_one({"_id": bid, "status": {"$ne": "cancelled"}}, {"$set": f})
+
+
+async def _cancelled(bid: str) -> bool:
+    d = await db.ap_batches_col.find_one({"_id": bid})
+    return bool(d and d.get("status") == "cancelled")
+
+
 async def process(bot, b: dict):
     """Idempotent: every step checks what is already saved, so a restart continues where it stopped."""
     channel = S.get("db_channel")
@@ -257,82 +367,131 @@ async def process(bot, b: dict):
     root = b.get("dir") or ""
     ch = await db.ap_get_channel(cid) or {}
     vids, imgs = b.get("vids") or [], b.get("imgs") or []
+    live = LIVE[cid] = {"bid": bid, "name": b.get("name") or "Folder", "stage": "videos", "ts": time.time(),
+                        "cancel": False, "file": "", "tr": P.Tracker(), "itr": P.Tracker(),
+                        "v_done": len(b.get("stored") or []), "v_tot": len(vids),
+                        "i_done": len(b.get("img_urls") or {}), "i_tot": len(imgs)}
     try:
         # 1) videos / files -> ONE file-store link for the folder
         vtoken = b.get("vtoken")
         if vids and not vtoken:
             vtoken = db.new_token()
-            await BT._set(bid, vtoken=vtoken)
+            await _save(bid, vtoken=vtoken)
         stored = list(b.get("stored") or [])
         if vids and not b.get("link_done"):
+            todo_bytes = sum(os.path.getsize(os.path.join(root, v["rel"])) for i, v in enumerate(vids)
+                             if i >= len(stored) and os.path.exists(os.path.join(root, v["rel"])))
+            live["tr"].tot = todo_bytes
+            base = 0                                           # bytes of the videos already finished in this run
             for i, v in enumerate(vids):
                 if i < len(stored):
                     continue
                 path = os.path.join(root, v["rel"])
                 if not os.path.exists(path):
                     raise Lost(f"file missing: {v['rel']}")
+                vsize = os.path.getsize(path)
+                live["file"] = os.path.basename(v["rel"])
+
+                async def vprog(cur, tot, _base=base):
+                    live["tr"].update(_base + cur, 0)
+                    live["ts"] = time.time()
+                    if live["cancel"] and mtproto.client:
+                        mtproto.client.stop_transmission()    # 🛑 Stop pressed: abort this upload at once
+
                 stored.append(await store_video(bot, channel["id"], path, os.path.basename(v["rel"]),
-                                                db.make_code(vtoken, i), by))
-                await BT._set(bid, stored=stored, status="working")
+                                                db.make_code(vtoken, i), by, progress=vprog))
+                base += vsize
+                live["v_done"] = len(stored)
+                await _save(bid, stored=stored, status="working")
                 _rm(path)
             try:
                 await db.create_link(stored, by, (b["name"] or "Folder")[:40] + " (videos)", token=vtoken, chan=cid)
             except DuplicateKeyError:
                 pass                                           # a crash happened right after the link was created
-            await BT._set(bid, link_done=True)
+            await _save(bid, link_done=True)
 
-        # 2) images -> imgbb (original bytes, slow random cooldown, key rotation) -> Telegraph
+        # 2) images -> imgbb (original bytes, IMG_PARALLEL at a time, key rotation) -> Telegraph
+        live["stage"] = "images"
         urls = dict(b.get("img_urls") or {})
         failed = list(b.get("img_failed") or [])
         tries = dict(b.get("img_tries") or {})
         bad = {f["i"] for f in failed}
-        async with aiohttp.ClientSession(timeout=BT._TIMEOUT) as session:
-            for i, im in enumerate(imgs):
-                k = str(i)
-                if k in urls or i in bad:
-                    continue
+        todo = [i for i in range(len(imgs)) if str(i) not in urls and i not in bad]
+        live["itr"].tot = len(todo)
+        sem, lock, fatal = asyncio.Semaphore(IMG_PARALLEL), asyncio.Lock(), []
+
+        async def one(session, i: int):
+            async with sem:
+                if fatal or live["cancel"]:
+                    return
+                k, im = str(i), imgs[i]
                 path = os.path.join(root, im["rel"])
                 if not os.path.exists(path):
-                    raise Lost(f"file missing: {im['rel']}")
+                    fatal.append(Lost(f"file missing: {im['rel']}"))
+                    return
                 if os.path.getsize(path) > ZS.IMGBB_MAX:
-                    failed.append({"i": i, "name": os.path.basename(im["rel"]), "why": "over 32 MB (imgbb limit)"})
-                    bad.add(i)
-                    await BT._set(bid, img_failed=failed)
-                    continue
+                    async with lock:
+                        failed.append({"i": i, "name": os.path.basename(im["rel"]), "why": "over 32 MB (imgbb limit)"})
+                        bad.add(i)
+                        await _save(bid, img_failed=failed)
+                    return
                 data = await asyncio.to_thread(Path(path).read_bytes)      # ORIGINAL bytes, never re-encoded
                 try:
-                    urls[k] = await BT.upload(session, data)
+                    url = await BT.upload(session, data)
                 except BT.NoKeyAvailable as e:
                     msg = str(e)
                     if "resting" in msg or "no imgbb API key" in msg:
-                        raise                                              # key problem: pause, retry later
+                        fatal.append(e)                                    # key problem: pause, retry later
+                        return
                     tries[k] = tries.get(k, 0) + 1
                     if tries[k] < MAX_IMG_TRIES:
-                        await BT._set(bid, img_tries=tries)
-                        raise
-                    failed.append({"i": i, "name": os.path.basename(im["rel"]), "why": msg[:80]})
-                    bad.add(i)
-                    await BT._set(bid, img_failed=failed)
-                    continue
-                await BT._set(bid, img_urls=urls, status="working")
+                        async with lock:
+                            await _save(bid, img_tries=tries)
+                        fatal.append(e)
+                        return
+                    async with lock:
+                        failed.append({"i": i, "name": os.path.basename(im["rel"]), "why": msg[:80]})
+                        bad.add(i)
+                        await _save(bid, img_failed=failed)
+                    return
+                async with lock:
+                    urls[k] = url
+                    await _save(bid, img_urls=urls, status="working")
+                    live["i_done"] = len(urls)
+                    live["itr"].update(live["itr"].cur + 1, 0)
+                    live["ts"] = time.time()
                 _rm(path)
                 await asyncio.sleep(random.uniform(BT.CD_MIN, BT.CD_MAX))
 
+        async with aiohttp.ClientSession(timeout=BT._TIMEOUT) as session:
+            await asyncio.gather(*(one(session, i) for i in todo))
+            if live["cancel"] or await _cancelled(bid):
+                return
+            if fatal:
+                raise fatal[0]
             ordered = [urls[str(i)] for i in range(len(imgs)) if str(i) in urls]
             if not ordered:
                 raise Lost("no image could be uploaded to imgbb")
             tg = b.get("tg_url")
             if not tg:
+                live["stage"] = "telegraph"
                 tg = await _telegraph(session, BT.render_title(ch.get("tg_title"), b["name"]), ordered)
-                await BT._set(bid, tg_url=tg)
+                await _save(bid, tg_url=tg)
     except Lost as e:
         log.warning("ZIP folder %s failed: %s", b.get("name"), e)
-        await BT._set(bid, status="failed", error=str(e)[:300])
+        await _save(bid, status="failed", error=str(e)[:300])
         await _notify(bot, b, failed_name=b.get("name"), why=str(e))
         await _cleanup(b)
         return
+    except Exception:
+        if live["cancel"] or await _cancelled(bid):            # aborted by 🛑 Stop: not an error
+            return
+        raise
+    finally:
+        if LIVE.get(cid) is live:
+            live["ts"] = 0
 
-    await BT._set(bid, status="need_thumb", error="")
+    await _save(bid, status="need_thumb", error="")
     await _cleanup(b)
     await _notify(bot, b)
 
