@@ -8,6 +8,8 @@ Vault Pack ZIP upload - panel screens (registered into handlers.admin's ACTIONS 
                           1 image = 1 post · 2 images = 2 posts · ... (same Telegraph + video link, different thumbnail)
                           ✅ DONE            create the posts from the images you sent
                           📌 FIXED THUMBNAIL  no image: use the channel's fixed thumbnail (1 post)
+                        (a folder with ONLY videos skips this screen: 10 frames are captured from the videos and the
+                         post is created automatically with the fixed thumbnail)
                           ⏭ SKIP             decide later        📌 FIXED FOR ALL LEFT  every waiting folder, fixed thumbnail
                           ⏹ STOP             leave the screen (nothing is lost, folders keep waiting)
 
@@ -52,6 +54,8 @@ def _zip_text(zips: list) -> str:
     big = "" if mtproto.ready else "\n⚠️ MTPROTO IS OFF (API_ID / API_HASH): ONLY ZIPS UP TO 20 MB WORK."
     return (f"📦 <b>ZIP UPLOAD</b>\n\n{len(zips)} ZIP(S) RECEIVED.\n"
             "EACH ZIP = FOLDERS, EACH FOLDER = IMAGES + VIDEOS.\n"
+            "🎞 A FOLDER WITH ONLY VIDEOS = 10 RANDOM FRAMES (FACES FIRST, NO COMPRESSION) → IMGBB → PREVIEW LINK, "
+            "FIXED THUMBNAIL.\n"
             "SEND MORE ZIPS, OR TAP START.\n\n" + (rows or "<i>NONE YET</i>") + big)
 
 

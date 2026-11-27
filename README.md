@@ -138,6 +138,11 @@ pack.zip
    * **images → imgbb → ONE Telegraph article** - the original bytes are uploaded, nothing is compressed, resized or re-encoded
      (imgbb limit: 32 MB per image; jpg / png / gif / webp / bmp). Very big folders are split into linked Telegraph parts.
    * **videos → Database Channel → ONE file-store link** per folder.
+   * **🎞 folder with ONLY videos (no image)** → the bot captures **10 frames** from the videos at random moments
+     (`utils/framegrab.py`): clear human faces are preferred (OpenCV), the rest are filled with the sharpest frames.
+     Frames are lossless PNG at the original video resolution (no compression, no resize) → imgbb → Telegraph preview link.
+     Its post is created **automatically with the channel's fixed thumbnail** (Caption → Thumbnail must be set, otherwise
+     the folder waits in 🖼 Thumbnails like the others). Needs `ffmpeg` (in the Docker image) + `opencv-python-headless`.
 3. When the links are ready you get a message with **🖼 Thumbnails** (also in Create Post and Queue).
 4. The bot names a folder - you send its thumbnail(s):
    * 1 image → 1 post · 2 images → 2 posts · … (same Telegraph + video link, different thumbnail, normal Vault Pack gap rules)
@@ -146,7 +151,7 @@ pack.zip
 
 Notes: ZIPs over 20 MB and big videos need `API_ID` + `API_HASH` (MTProto). `ffmpeg` (in the Docker image) gives uploaded videos
 duration / size / preview. Unpacked files live in `ZIP_WORK_DIR` (`/data/zipwork`, a docker volume) and are deleted file by file.
-Offline test: `python3 tests/test_zipscan.py`
+Offline tests: `python3 tests/test_zipscan.py` · `python3 tests/test_zipvault_flow.py` · `python3 tests/test_framegrab.py`
 
 ## 5. Panel design
 One style everywhere (`utils/ui.py` text, `utils/keyboards.py` buttons): bold CAPS heading, minimal CAPS description,

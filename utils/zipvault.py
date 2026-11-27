@@ -12,6 +12,9 @@ Vault Pack - ZIP upload. Everything here only runs for Vault Pack channels (post
   process      worker step of such a job (called from utils/batch.py):
                  videos / files -> Database Channel -> ONE file-store link per folder
                  images         -> imgbb (ORIGINAL bytes, no re-encoding, no resizing) -> Telegraph article(s)
+                 folder with ONLY videos (no image): 10 random lossless frames (faces preferred) are captured
+                 from the videos first (utils/framegrab.py) and used as its images; its post is then created
+                 automatically with the channel's FIXED thumbnail
                  then status "need_thumb": the folder waits until YOU choose its thumbnail(s)
   make_posts   thumbnails of a folder -> posts (1 thumbnail = 1 post; none = the channel's fixed thumbnail)
 
@@ -36,6 +39,7 @@ from database import db
 from database.db import settings as S
 from utils import autoposter as AP
 from utils import batch as BT
+from utils import framegrab as FG
 from utils import progress as P
 from utils import zipscan as ZS
 from utils.helpers import call
@@ -79,16 +83,17 @@ async def _download(bot, z: dict, dest: str, progress):
 
 
 async def queue_zip_folders(cid: int, folders: list, by: int, root: str, zip_name: str) -> list:
-    """One resumable job per folder that has at least one image. Nothing is uploaded here. Returns the new job ids."""
+    """One resumable job per folder that has at least one image OR video. A folder with videos only gets
+    "frames": True (10 frames are captured from its videos by the worker). Nothing is uploaded here."""
     ids = []
     t0 = time.time()
     for i, f in enumerate(folders):
-        if not f["images"]:
+        if not f["images"] and not f["videos"]:
             continue
         bid = db.new_token()
         await db.ap_batches_col.insert_one({
             "_id": bid, "chan": cid, "name": f["name"], "by": by, "status": "pending", "src": "zip",
-            "dir": root, "zip": zip_name,
+            "dir": root, "zip": zip_name, "frames": not f["images"], "frames_done": False,
             "imgs": [{"rel": r} for r in f["images"]], "vids": [{"rel": r} for r in f["videos"]],
             "items": [], "img_urls": {}, "img_failed": [], "img_tries": {}, "stored": [], "vtoken": None,
             "tg_url": None, "next_try": 0, "error": "", "created": t0 + i * 0.001})
@@ -119,7 +124,9 @@ async def work_text(cid: int, ids: list) -> str:
     t = head + (f"\n▶️ NOW ▸ <b>{html.escape(live['name'][:40])}</b>\n"
                 f"🎬 VIDEOS ▸ <b>{live['v_done']}/{live['v_tot']}</b> · 🖼 IMAGES ▸ <b>{live['i_done']}/{live['i_tot']}</b>\n\n")
     st = live["stage"]
-    if st == "videos":
+    if st == "frames":
+        t += "🎞 CAPTURING 10 FRAMES FROM THE VIDEOS (FACES FIRST)…"
+    elif st == "videos":
         t += f"🎬 UPLOADING VIDEO TO CHANNEL\n{live['file'][:40]}\n" + live["tr"].card()
     elif st == "images":
         it = live["itr"]
@@ -160,7 +167,7 @@ async def run_job(bot, cid: int, by: int, zips: list, chat_id: int, msg_id: int,
     st = {"stage": "start", "tag": "", "z": None}
     lines: list = []
     errors: list = []
-    queued = skipped_nophoto = ignored = 0
+    queued = skipped_nophoto = ignored = auto_frames = 0
     t_start = time.time()
 
     def render() -> str:
@@ -209,12 +216,15 @@ async def run_job(bot, cid: int, by: int, zips: list, chat_id: int, msg_id: int,
                 folders = await asyncio.to_thread(ZS.scan_dir, root, loose)
                 ids = await queue_zip_folders(cid, folders, by, root, z["name"])
                 job["ids"].extend(ids)
-                skipped_nophoto += sum(1 for f in folders if not f["images"])
+                skipped_nophoto += sum(1 for f in folders if not f["images"] and not f["videos"])
+                auto_frames += sum(1 for f in folders if not f["images"] and f["videos"])
                 ignored += sum(f["ignored"] for f in folders)
                 queued += len(ids)
                 for f in folders:
                     if f["images"]:
                         lines.append(f"• {html.escape(f['name'][:30])} — 🖼 {len(f['images'])} · 🎬 {len(f['videos'])}")
+                    elif f["videos"]:
+                        lines.append(f"• {html.escape(f['name'][:30])} — 🎞 {FG.COUNT} FRAMES · 🎬 {len(f['videos'])}")
                 if not ids:
                     shutil.rmtree(root, ignore_errors=True)
                 if ids:
@@ -252,15 +262,18 @@ async def run_job(bot, cid: int, by: int, zips: list, chat_id: int, msg_id: int,
         c = db.ap_batches_col
         failed = await c.count_documents({"_id": {"$in": job["ids"]}, "status": "failed"})
         ready = queued - failed
-        text = (f"✅ <b>ZIP UPLOAD</b>\n\n<b>{ready}</b> OF {queued} FOLDER(S) READY ⏱ {took}.\n"
-                "TAP 🖼 THUMBNAILS TO CHOOSE THE THUMBNAIL OF EACH FOLDER.\n\n"
+        waiting = await waiting_count(cid)
+        note = "TAP 🖼 THUMBNAILS TO CHOOSE THE THUMBNAIL OF EACH FOLDER." if waiting else "ALL POSTS ARE CREATED."
+        text = (f"✅ <b>ZIP UPLOAD</b>\n\n<b>{ready}</b> OF {queued} FOLDER(S) READY ⏱ {took}.\n{note}\n\n"
                 + "\n".join(lines[:12]) + (f"\n… +{len(lines) - 12} MORE" if len(lines) > 12 else ""))
         if failed:
             text += f"\n⚠️ FAILED: {failed} (SEND THEIR ZIP AGAIN)"
     else:
-        text = "⚠️ <b>ZIP UPLOAD</b>\n\nNO FOLDER WITH IMAGES FOUND."
+        text = "⚠️ <b>ZIP UPLOAD</b>\n\nNO FOLDER WITH IMAGES OR VIDEOS FOUND."
+    if auto_frames and queued:
+        text += f"\n🎞 VIDEO-ONLY FOLDERS: {auto_frames} (10 FRAMES EACH, FIXED THUMBNAIL)"
     if skipped_nophoto:
-        text += f"\n⏭ SKIPPED (NO IMAGE): {skipped_nophoto}"
+        text += f"\n⏭ SKIPPED (NO IMAGE / VIDEO): {skipped_nophoto}"
     if ignored:
         text += f"\n⏭ IGNORED FILES (NOT IMAGE / VIDEO): {ignored}"
     for e in errors:
@@ -372,6 +385,28 @@ async def process(bot, b: dict):
                         "v_done": len(b.get("stored") or []), "v_tot": len(vids),
                         "i_done": len(b.get("img_urls") or {}), "i_tot": len(imgs)}
     try:
+        # 0) folder with ONLY videos: capture 10 random lossless frames (faces first) BEFORE the videos are
+        #    uploaded and deleted from disk. They become the folder's images (imgbb -> Telegraph, step 2).
+        if b.get("frames") and not b.get("frames_done"):
+            live["stage"] = "frames"
+            paths = [os.path.join(root, v["rel"]) for v in vids]
+            if not all(os.path.exists(p) for p in paths):
+                raise Lost("video files missing")
+            out_dir = os.path.join(root, f"_frames_{bid}")
+            shutil.rmtree(out_dir, ignore_errors=True)                 # a half-finished earlier try
+            try:
+                got = await asyncio.to_thread(FG.grab, paths, out_dir, FG.COUNT, lambda: live["cancel"])
+            except FG.Cancelled:
+                return
+            except RuntimeError as e:
+                raise Lost(str(e))
+            if not got:
+                raise Lost("no frame could be captured from the videos")
+            imgs = [{"rel": os.path.relpath(g, root)} for g in got]
+            await _save(bid, imgs=imgs, frames_done=True, status="working")
+            live["i_tot"] = len(imgs)
+            live["ts"] = time.time()
+
         # 1) videos / files -> ONE file-store link for the folder
         vtoken = b.get("vtoken")
         if vids and not vtoken:
@@ -492,8 +527,26 @@ async def process(bot, b: dict):
             live["ts"] = 0
 
     await _save(bid, status="need_thumb", error="")
+    if b.get("frames"):                                    # video-only folder: post with the FIXED thumbnail right away
+        await _auto_fixed(bot, b)
     await _cleanup(b)
     await _notify(bot, b)
+
+
+async def _auto_fixed(bot, b: dict) -> bool:
+    """Video-only folder (frames as preview): create its post with the channel's fixed thumbnail, no questions asked.
+    Without a fixed thumbnail the folder just waits in 🖼 Thumbnails like any other."""
+    ch = await db.ap_get_channel(b["chan"]) or {}
+    if not ch.get("fthumb"):
+        return False
+    doc = await db.ap_batches_col.find_one({"_id": b["_id"]})
+    if not doc or doc.get("status") != "need_thumb":
+        return False
+    try:
+        return bool(await make_posts(bot, doc, [], b["by"], fixed=True))
+    except Exception as e:
+        log.warning("auto fixed-thumbnail post of %s failed: %s", b.get("name"), e)
+        return False
 
 
 async def _notify(bot, b: dict, failed_name=None, why: str = ""):
@@ -508,6 +561,15 @@ async def _notify(bot, b: dict, failed_name=None, why: str = ""):
                 pass
         return
     n = await waiting_count(cid)
+    if not n:
+        text = "✅ <b>VAULT PACK</b>\n\nALL FOLDERS ARE DONE, THE POSTS ARE CREATED.\n(VIDEO-ONLY FOLDERS: 10 FRAMES + FIXED THUMBNAIL.)"
+        if failed_name:
+            text += f"\n⚠️ “{html.escape(failed_name)}” FAILED: <code>{html.escape(why[:200])}</code>\nSEND ITS ZIP AGAIN."
+        try:
+            await bot.send_message(by, styled(text))
+        except Exception:
+            log.warning("could not notify admin %s", by)
+        return
     text = f"✅ <b>VAULT PACK</b>\n\n<b>{n}</b> FOLDER(S) HAVE THEIR LINKS (TELEGRAPH + VIDEO).\nNEXT: CHOOSE THE THUMBNAILS."
     if failed_name:
         text += f"\n⚠️ “{html.escape(failed_name)}” FAILED: <code>{html.escape(why[:200])}</code>\nSEND ITS ZIP AGAIN."

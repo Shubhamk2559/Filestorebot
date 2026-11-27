@@ -162,6 +162,88 @@ async def main():
         check((await batches.find_one({"_id": "B3"}))["status"] == "need_thumb", "folder stays waiting after an error")
 
 
+        # ---- folder with ONLY videos: 10 frames -> imgbb (original bytes) -> Telegraph, post with the FIXED thumbnail
+        n0 = len(batches.docs)
+        ids = await ZV.queue_zip_folders(5, [{"name": "OnlyVid", "images": [], "videos": ["OnlyVid/v1.mp4"], "ignored": 0},
+                                             {"name": "Nothing", "images": [], "videos": [], "ignored": 2},
+                                             {"name": "Normal", "images": ["Normal/1.jpg"], "videos": [], "ignored": 0}],
+                                         7, "/tmp/none", "pack.zip")
+        check(len(ids) == 2 and len(batches.docs) == n0 + 2, "video-only + normal folder queued, empty folder skipped")
+        qd = {d["name"]: d for d in batches.docs[n0:]}
+        check(qd["OnlyVid"]["frames"] is True and qd["Normal"]["frames"] is False, "only the video-only folder asks for frames")
+        batches.docs[n0:] = []                                                  # keep the rest of this test simple
+
+        posts.clear()
+        db.ap_get_channel = AsyncMock(return_value={"_id": 5, "fthumb": "FT", "tg_title": "{folder_name}"})
+        with tempfile.TemporaryDirectory() as root2:
+            os.makedirs(os.path.join(root2, "Clips"))
+            for n in ("v1.mp4", "v2.mp4"):
+                open(os.path.join(root2, "Clips", n), "wb").write(b"video-" + n.encode())
+            b4 = {"_id": "B4", "chan": 5, "name": "Clips", "by": 7, "status": "pending", "src": "zip", "dir": root2,
+                  "frames": True, "frames_done": False, "imgs": [], "vids": [{"rel": "Clips/v1.mp4"}, {"rel": "Clips/v2.mp4"}],
+                  "items": [], "img_urls": {}, "img_failed": [], "img_tries": {}, "stored": [], "vtoken": None,
+                  "tg_url": None, "next_try": 0, "error": "", "created": 9}
+            await batches.insert_one(b4)
+            seen_paths = {}
+
+            def fake_grab(paths, out_dir, count, cancel=None, seed=None):
+                seen_paths["videos_exist"] = all(os.path.exists(p) for p in paths)       # frames BEFORE videos are removed
+                os.makedirs(out_dir)
+                out = []
+                for i in range(count):
+                    p = os.path.join(out_dir, f"frame_{i + 1:02d}.png")
+                    open(p, "wb").write(f"FRAME-{i}".encode())
+                    out.append(p)
+                return out
+
+            ZV.FG.grab = fake_grab
+            got = []
+
+            async def up2(session, data):
+                got.append(data)
+                return f"https://i.ibb.co/f/{len(got)}.png"
+
+            BT.upload = up2
+            ZV.store_video = AsyncMock(return_value=902)
+            ZV._telegraph = AsyncMock(return_value="https://telegra.ph/Clips-01-01")
+            ZV._notify = AsyncMock()
+            await ZV.process(MagicMock(), dict(b4))
+            d4 = await batches.find_one({"_id": "B4"})
+            check(seen_paths.get("videos_exist"), "frames are captured before the videos are uploaded / deleted")
+            check(got == [f"FRAME-{i}".encode() for i in range(10)], f"10 frames uploaded untouched, in order ({len(got)})")
+            check(ZV._telegraph.await_args.args[2] == [f"https://i.ibb.co/f/{i}.png" for i in range(1, 11)], "telegraph gets the 10 frames")
+            check(ZV.store_video.await_count >= 2 and d4["link_done"], "both videos stored behind one link")
+            check(d4["status"] == "done" and d4["frames_done"] and len(d4["imgs"]) == 10, f"folder finished by itself ({d4['status']})")
+            check(len(posts) == 1 and posts[0].get("fixed_thumb") and posts[0]["thumb"] is None, "ONE post with the fixed thumbnail")
+            check(posts[0]["tg_url"] == "https://telegra.ph/Clips-01-01" and posts[0]["n"] == 2, "post has the preview link + 2 files")
+            check(not os.path.exists(root2), "frames + videos removed from disk")
+
+        # no fixed thumbnail set -> the folder waits for a manual thumbnail instead of failing
+        posts.clear()
+        db.ap_get_channel = AsyncMock(return_value={"_id": 5, "tg_title": "{folder_name}"})
+        with tempfile.TemporaryDirectory() as root3:
+            os.makedirs(os.path.join(root3, "Clips2"))
+            open(os.path.join(root3, "Clips2", "v.mp4"), "wb").write(b"v")
+            await batches.insert_one({"_id": "B5", "chan": 5, "name": "Clips2", "by": 7, "status": "pending", "src": "zip",
+                                      "dir": root3, "frames": True, "frames_done": False, "imgs": [], "vids": [{"rel": "Clips2/v.mp4"}],
+                                      "items": [], "img_urls": {}, "img_failed": [], "img_tries": {}, "stored": [], "vtoken": None,
+                                      "tg_url": None, "next_try": 0, "error": "", "created": 10})
+            await ZV.process(MagicMock(), dict(await batches.find_one({"_id": "B5"})))
+            check((await batches.find_one({"_id": "B5"}))["status"] == "need_thumb" and not posts, "no fixed thumbnail: folder waits, no post")
+
+        # frames cannot be captured (e.g. broken videos) -> clear failure, not a crash
+        with tempfile.TemporaryDirectory() as root4:
+            os.makedirs(os.path.join(root4, "Bad"))
+            open(os.path.join(root4, "Bad", "v.mp4"), "wb").write(b"v")
+            ZV.FG.grab = lambda *a, **k: []
+            await batches.insert_one({"_id": "B6", "chan": 5, "name": "Bad", "by": 7, "status": "pending", "src": "zip",
+                                      "dir": root4, "frames": True, "frames_done": False, "imgs": [], "vids": [{"rel": "Bad/v.mp4"}],
+                                      "items": [], "img_urls": {}, "img_failed": [], "img_tries": {}, "stored": [], "vtoken": None,
+                                      "tg_url": None, "next_try": 0, "error": "", "created": 11})
+            await ZV.process(MagicMock(), dict(await batches.find_one({"_id": "B6"})))
+            d6 = await batches.find_one({"_id": "B6"})
+            check(d6["status"] == "failed" and "frame" in d6["error"], f"unreadable videos -> failed folder ({d6['status']})")
+
 asyncio.run(main())
 print("FAILED:\n" + "\n".join(fails) if fails else "ALL OK")
 sys.exit(1 if fails else 0)

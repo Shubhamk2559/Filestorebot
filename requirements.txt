@@ -7,3 +7,4 @@ python-dotenv>=1.0
 pyrofork>=2.3.60,<3
 uvloop>=0.19; sys_platform != "win32"
 tgcrypto>=1.2.5
+opencv-python-headless>=4.9,<5
