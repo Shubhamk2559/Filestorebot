@@ -15,6 +15,7 @@ from aiohttp import web
 from database import db
 from utils import ads
 from utils import home
+from utils import lbweb
 
 log = logging.getLogger(__name__)
 LINK_TTL = 30  # seconds: cache link lookups so the redirect doesn't hit Mongo every time
@@ -69,6 +70,7 @@ async def start_web_server(port: int, bot=None):
     app = web.Application()
     app["bot"] = bot
     ads.setup_routes(app)   # /ad (Mini App), /api/ad/*, /monetag/postback
+    lbweb.setup_routes(app)  # /bkdl/<tok> (backup part download), /bkup/<tok> (recover upload page)
     app.router.add_get("/", home.page)                       # landing page (utils/home.py)
     app.router.add_get("/assets/home-image", home.image)
     app.router.add_get("/health", health)
