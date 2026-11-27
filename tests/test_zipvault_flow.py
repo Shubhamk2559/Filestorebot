@@ -85,6 +85,7 @@ async def main():
     db.create_link = AsyncMock()
     db.add_file = AsyncMock()
     BT.CD_MIN = BT.CD_MAX = 0
+    ZV.IMG_PARALLEL = 1
 
     with tempfile.TemporaryDirectory() as root:
         os.makedirs(os.path.join(root, "Wedding"))
