@@ -11,6 +11,8 @@ services:
       - "8080"                           # only Caddy can reach it; not open to the internet directly
     stop_grace_period: 20s
     mem_limit: 4g
+    volumes:
+      - zipwork:/data/zipwork            # extracted ZIP files (Vault Pack ZIP upload) survive restarts
     logging:
       driver: json-file
       options:
@@ -40,5 +42,6 @@ services:
         max-file: "3"
 
 volumes:
+  zipwork:
   caddy_data:
   caddy_config:

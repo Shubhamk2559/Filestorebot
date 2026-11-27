@@ -20,6 +20,7 @@ import config
 from database import db
 from handlers import admin, start, upload
 from handlers import autoposter as _autoposter  # noqa: F401  (registers the Autoposter panel screens)
+from handlers import zipvault as _zipvault      # noqa: F401  registers the Vault Pack ZIP upload + thumbnail screens
 from handlers import backup as _backup          # noqa: F401  registers the Backup / Restore screens
 from handlers import analytics as _analytics    # noqa: F401  registers the Earnings / Analytics screens
 from handlers import transfer as _transfer      # noqa: F401  registers the Transfer screens (user-account channel copy)
