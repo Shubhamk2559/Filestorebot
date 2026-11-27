@@ -227,6 +227,9 @@ async def _set(bid: str, **f):
 
 async def _process(bot, b: dict):
     """Idempotent: every step checks what is already saved, so a restart continues where it stopped."""
+    if b.get("src") == "zip":                      # ZIP upload folders have their own worker step (utils/zipvault.py)
+        from utils import zipvault as ZV
+        return await ZV.process(bot, b)
     from utils import autoposter as AP
     channel = S.get("db_channel")
     if not channel:
