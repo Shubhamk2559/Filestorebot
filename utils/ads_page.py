@@ -12,12 +12,14 @@ PAGE = r"""<!doctype html>
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#d6eefb">
 <title>Unlock your files</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+Bhai+2:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root{--sky:#87cefa;--sky-d:#4fb0ec;--ink:#12354d;--muted:#4d7088;--bg1:#eaf6fe;--bg2:#c9e8fb}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;min-height:100%;color:var(--ink);
-    font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+    font:500 17px/1.4 "Baloo Bhai 2",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   body{min-height:100vh;background:linear-gradient(180deg,var(--bg1),var(--bg2));overflow-x:hidden}
   main{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
     padding:max(24px,env(safe-area-inset-top)) 18px max(24px,env(safe-area-inset-bottom))}
@@ -27,32 +29,32 @@ PAGE = r"""<!doctype html>
   .card{width:100%;max-width:380px;padding:26px 22px 24px;text-align:center;border-radius:20px;
     background:#fff;border:1px solid #b5defa}
   .icon{display:none}
-  h1{margin:0 0 8px;font-weight:700;font-size:1.4rem;line-height:1.25;color:var(--ink)}
-  p{margin:0 0 6px;color:var(--muted);font-size:15px;line-height:1.6;white-space:pre-line}
+  h1{margin:0 0 6px;font-weight:800;font-size:1.75rem;line-height:1.15;color:var(--ink)}
+  p{margin:0 0 6px;color:var(--muted);font-weight:500;font-size:1.06rem;line-height:1.4;white-space:pre-line}
   .spin{width:40px;height:40px;margin:20px auto 4px;border-radius:50%;
     border:4px solid #d6eefb;border-top-color:var(--sky-d);animation:r .9s linear infinite}
   @keyframes r{to{transform:rotate(360deg)}}
   button{margin-top:20px;width:100%;border:0;border-radius:14px;padding:15px;
-    font:700 1.05rem system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);cursor:pointer;
+    font:700 1.22rem/1.2 "Baloo Bhai 2",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);cursor:pointer;
     background:var(--sky)}
   button:active{background:var(--sky-d)}
   .hide{display:none!important}
   .guide{text-align:left;margin:18px 0 0}
-  .gt{font-weight:700;font-size:1.05rem;color:var(--ink);margin:0 0 4px}
-  .gs{font-size:13.5px;line-height:1.5;margin:0 0 10px}
+  .gt{font-weight:800;font-size:1.3rem;line-height:1.2;color:var(--ink);margin:0 0 4px}
+  .gs{font-weight:500;font-size:1rem;line-height:1.35;margin:0 0 10px}
   .gstep{margin:0 0 16px}
-  .gh{display:flex;align-items:flex-start;gap:10px;font-size:14.5px;line-height:1.45;color:var(--ink)}
-  .gh .n{flex:0 0 26px;height:26px;border-radius:50%;background:var(--sky);color:var(--ink);font-weight:700;font-size:14px;
+  .gh{display:flex;align-items:flex-start;gap:10px;font-weight:500;font-size:1.08rem;line-height:1.3;color:var(--ink)}
+  .gh .n{flex:0 0 26px;height:26px;border-radius:50%;background:var(--sky);color:var(--ink);font-weight:700;font-size:1rem;
     display:flex;align-items:center;justify-content:center}
   .gh span:last-child{padding-top:2px}
   .gimg{display:block;width:100%;height:auto;margin-top:8px;border-radius:14px;border:1px solid #cfe8f9;background:#eef8fe}
   .note{margin:4px 0 0;padding:12px 14px;border-radius:12px;background:#eef8fe;border:1px solid #cfe8f9;
-    color:var(--muted);font-size:14px;line-height:1.55}
+    color:var(--muted);font-weight:500;font-size:1.02rem;line-height:1.4}
   .note b{color:var(--ink)}
   .note ol{margin:6px 0 8px;padding-left:20px}.note li{margin:3px 0}
   button.alt{margin-top:10px;background:#fff;border:2px solid var(--sky)}
   button.alt:active{background:#eef8fe}
-  .on{margin-top:18px;color:var(--muted);font-size:14px;font-weight:600}
+  .on{margin-top:18px;color:var(--muted);font-size:1rem;font-weight:600}
   .on b{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sky-d);margin-right:8px}
   @media (prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}}
 </style>
