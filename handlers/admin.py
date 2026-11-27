@@ -48,8 +48,7 @@ PAGE = 8
 MAX_RANGE = 10000
 TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first",
              "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst", "tr_cl",
-             "tr_wp", "pick_state", "pick_kind", "picked_chat", "ct_uid",
-             "zv_cid", "zv_zips", "zv_bid", "zv_thumbs", "zv_skip", "zv_status", "zv_ts")
+             "tr_wp", "pick_state", "pick_kind", "picked_chat", "ct_uid")
 
 ACTIONS = {}
 STATES = {}
@@ -105,7 +104,7 @@ async def done(update, context, text, to="home"):
     await update.effective_message.reply_text(text, reply_markup=K.back(to))
 
 
-async def ask_chat(update, context, state_name, text, channel=True, group=False):
+async def ask_chat(update, context, state_name, text, channel=True, group=False, extra=None):
     """Prompt with the bot's known channels / groups as buttons right in the chat."""
     context.user_data["state"] = state_name
     context.user_data["pick_state"] = state_name
@@ -115,7 +114,7 @@ async def ask_chat(update, context, state_name, text, channel=True, group=False)
                 f"adm:pickch:{d['_id']}")] for d in items]
     hint = ("TAP A CHANNEL, OR FORWARD A POST / SEND ITS @USERNAME OR ID." if items else
             "NO CHANNEL SAVED YET. ADD THE BOT AS ADMIN, OR FORWARD A POST / SEND ITS @USERNAME OR ID.")
-    await show(update, f"{text}\n\n{hint}", kb(rows, ub("❌ Cancel", "adm:cancel")))
+    await show(update, f"{text}\n\n{hint}", kb(rows + (extra or []), ub("❌ Cancel", "adm:cancel")))
 
 
 @action("pickch")
@@ -303,7 +302,8 @@ async def a_dbch(update, context, args):
     cur = S.get("db_channel")
     now = f"<b>{esc(cur['title'] or '')}</b>" if cur else "NOT SET"
     await ask_chat(update, context, "dbch",
-                   head("📡", "Database Channel", f"CURRENT ▸ {now}\n\nCHOOSE WHERE FILES ARE STORED."))
+                   head("📡", "Database Channel", f"CURRENT ▸ {now}\n\nCHOOSE WHERE FILES ARE STORED."),
+                   extra=[[ub("♻️ Recover From Zip", "adm:lr")]] if is_owner(update.effective_user.id) else None)
 
 
 @state("dbch")
@@ -454,50 +454,6 @@ async def a_fsubrm(update, context, args):
     cid = int(args[0])
     await S.set("fsub_channels", [c for c in S.get("fsub_channels") if c["id"] != cid])
     await show_fsub(update, "🗑 CHANNEL REMOVED.")
-
-
-# ===================================================================== website channel
-
-def _hch_text(msg: str = "") -> str:
-    c = S.get("home_channel")
-    cur = f"<b>{esc(c['title'])}</b>\n{esc(c['link'])}" if c else "NOT SET (THE ENV / FORCE-SUB CHANNEL IS USED, IF ANY)"
-    return note(msg) + head("🌐", "Site Channel",
-                            "THE CHANNEL SHOWN ON TOP OF THE WEBSITE MAIN PAGE.\n"
-                            "THE BOT MUST BE AN ADMIN IN THAT CHANNEL.\n\n"
-                            f"<b>CURRENT</b>\n{cur}")
-
-
-@action("hch")
-async def a_hch(update, context, args):
-    rows = [[ub("✏️ Set / Change", "adm:hchset")]]
-    if S.get("home_channel"):
-        rows.append([ub("🗑 Remove", "adm:hchrm")])
-    await show(update, _hch_text(), kb(rows, ub("🔙 Back", "adm:settings")))
-
-
-@action("hchset")
-async def a_hchset(update, context, args):
-    await ask_chat(update, context, "hch",
-                   head("🌐", "Site Channel", "CHOOSE THE CHANNEL FOR THE WEBSITE MAIN PAGE."))
-
-
-@state("hch")
-async def st_hch(update, context):
-    chat = await resolve_channel(update, context, need_post=False)
-    if not chat:
-        return
-    link = await make_invite_link(context.bot, chat)
-    if not link:
-        await warn(update, "COULD NOT GET A LINK. MAKE THE CHANNEL PUBLIC OR GIVE THE BOT THE “INVITE USERS” PERMISSION.")
-        return
-    await S.set("home_channel", {"id": chat.id, "title": chat.title or str(chat.id), "link": link})
-    await done(update, context, f"✅ WEBSITE CHANNEL SET ▸ <b>{esc(chat.title or '')}</b>.", "hch")
-
-
-@action("hchrm")
-async def a_hchrm(update, context, args):
-    await S.set("home_channel", None)
-    await show(update, _hch_text("🗑 REMOVED."), kb([[ub("✏️ Set / Change", "adm:hchset")]], ub("🔙 Back", "adm:settings")))
 
 
 # ===================================================================== start image / caption

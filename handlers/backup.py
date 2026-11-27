@@ -51,7 +51,9 @@ async def a_bk(update, context, args):
                                     f"LAST BACKUP ▸ <b>{ago(S.get('bk_last'))}</b>\n"
                                     f"AUTO-BACKUP ▸ <b>{onoff(on)}</b> (EVERY 24 H)"),
                kb(grid([("📥 Backup Now", "adm:bknow"), ("📤 Restore", "adm:bkrestore"),
-                        (f"🔁 Auto-Backup: {onoff(on)}", "adm:bkauto")]), ub("🔙 Back", "adm:home")))
+                        (f"🔁 Auto-Backup: {onoff(on)}", "adm:bkauto")])
+                  + [[ub("💽 Database Backup (Local)", "adm:lb")], [ub("♻️ Recover From Zip", "adm:lr")]],
+                  ub("🔙 Back", "adm:home")))
 
 
 @action("bkauto")
