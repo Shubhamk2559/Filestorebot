@@ -142,5 +142,13 @@ start; parts can be processed in any order and in several runs. Files are checke
 token / slot is pointed at the new message. Running Recover again never uploads a file twice. A part is deleted from the VPS only when all its files are restored.
 The final report lists restored / skipped / failed (with reasons) and whether every link resolves.
 
-New optional env vars (all have defaults): `RESTORE_HOST_DIR` (default `./restore`), `BK_TMP_HOST_DIR` (default `./backup_tmp`), `LR_PACE` (seconds between recover uploads, 3), `LB_PREFETCH` (parallel chunks, 4).
+New optional env vars (all have defaults): `RESTORE_HOST_DIR` (default `./restore`), `BK_TMP_HOST_DIR` (default `./backup_tmp`), `LR_PACE` (seconds between recover uploads, 3).
+**Backup speed**: files are downloaded in parallel *ahead of* the zip writer (which still writes one entry at a time in plan order, so the
+manifest order and sha256 never change). Messages are read 200 ids per call (a single message is re-read only on `FILE_REFERENCE_EXPIRED`),
+thumbnails are fetched together with their file, and every file is cut into stripes (`LB_STRIPE` MiB per request call) spread over
+`LB_TRANSFERS` parallel requests and `LB_CLIENTS` MTProto clients. Downloaded-but-unwritten data never exceeds `LB_BUFFER_MB`
+(a 1.5 GB file is never held in RAM). Env (all optional): `LB_FILES` (5), `LB_TRANSFERS` (16), `LB_CLIENTS` (2), `LB_STRIPE` (4),
+`LB_BUFFER_MB` (128), `LB_WRITE_MB` (8). The progress message shows the real current speed and files/s; the log has one line per part
+(bytes, seconds, MB/s, files/s, peak buffer). If the dedicated MTProto client cannot start (shared slow session) or `tgcrypto` is missing,
+the owner gets a ⚠️ message and the panel shows the warning. Without `tgcrypto` MTProto crypto is pure Python (~1-2 MB/s): check the log for it first.
 Needs `API_ID` + `API_HASH`, and the owner must have pressed /start in the bot.
