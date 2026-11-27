@@ -6,7 +6,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+# gcc only as a fallback to build tgcrypto (the C speed module of MTProto) when no wheel exists for this CPU (e.g. ARM)
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && pip install -r requirements.txt \
+    && apt-get purge -y gcc libc6-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 RUN useradd -m -u 10001 bot && mkdir -p /data/zipwork && chown -R bot:bot /app /data
