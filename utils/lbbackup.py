@@ -21,6 +21,7 @@ import os
 import secrets
 import shutil
 import time
+from contextlib import aclosing
 from pathlib import Path
 
 from telegram.error import BadRequest, TelegramError
@@ -30,11 +31,12 @@ from database import db
 from database.db import settings as S
 from utils import backup as BK
 from utils import keyboards as K
+from utils import lbclient as LB
 from utils import lbcore as C
 from utils import lbpaths, lbweb
 from utils.helpers import call
-from utils.lbclient import (PREFETCH, describe, download_thumb, get_messages, iter_media, kwfilter, lbclient,
-                            with_flood)
+from utils.lbclient import describe, get_messages, kwfilter, lbclient, with_flood
+from utils.lbfetch import Prefetcher
 from utils.ui import esc, head, hl
 
 log = logging.getLogger(__name__)
@@ -127,6 +129,11 @@ class BackupRunner:
         self.dl_token = None
         self.t0 = 0.0
         self.bytes_run = 0
+        self.clients = []               # the MTProto clients of this run (several = several DC connection sets)
+        self.transfers = None           # parallel Telegram requests of this run
+        self.fmeter = C.Meter()         # files per second
+        self.files_run = 0
+        self.last_stats = {}            # prefetcher counters of the last built part (peak buffer, in-flight, ...)
 
     # ---------------------------------------------------------- state
     @property
@@ -317,11 +324,21 @@ class BackupRunner:
         ticker = None
         try:
             client = await lbclient.acquire()
+            self.clients = await lbclient.pool(client)
+            self.transfers = lbclient.effective_transfers(len(self.clients))
+            self.live["mode"] = lbclient.mode
+            self.live["warn"] = list(lbclient.warnings)
+            log.info("Local backup: %s | %d client(s), %d parallel transfers, %d files at a time, buffer %d MB",
+                     lbclient.mode or "client", len(self.clients), self.transfers, LB.FILES, LB.BUFFER_MB)
+            for w in self.live["warn"]:
+                log.warning("Local backup: %s", w)
             self._web_evt = asyncio.Event()
             cleanup_tmp(keep=(MONGO_SNAPSHOT,) if self.job["cur_part"] == 1 else ())
             await self._save(status="running", error="")
-            self.t0, self.bytes_run = time.time(), 0
+            self.t0, self.bytes_run, self.files_run = time.time(), 0, 0
             ticker = asyncio.ensure_future(self._ticker())
+            if self.live["warn"]:                               # tell the owner once: this run will be slow
+                await self._say(head("⚠️", "Backup Speed Warning", "\n\n".join(f"• {esc(w)}" for w in self.live["warn"])))
             while self.job["cur_part"] <= self.job["total_parts"] and not self.stop_flag:
                 if not await self._do_part(client, self.job["cur_part"]):
                     break
@@ -355,10 +372,13 @@ class BackupRunner:
         for attempt in range(3):
             self.live.update(step="building", part_files=0, part_bytes=0)
             self.meter.reset()
+            self.fmeter.reset()
             await self._save(step="building")
             rec, path = await self._build(client, n)
             self.live["step"] = "verifying"
+            tv = time.monotonic()
             ok, why, _ = await asyncio.to_thread(C.verify_zip, path)
+            log.info("Part %s verified in %.1fs", n, time.monotonic() - tv)
             if ok:
                 break
             log.warning("Part %s failed verification (%s), rebuilding", n, why)
@@ -366,7 +386,9 @@ class BackupRunner:
             rec = None
         if rec is None:
             raise RuntimeError(f"part {n} failed its integrity check: {why}")
+        th = time.monotonic()
         rec["sha256"] = await asyncio.to_thread(C.sha256_file, path)
+        log.info("Part %s sha256 in %.1fs", n, time.monotonic() - th)
 
         via = await self._deliver(client, rec, path)
         if via is None:                                      # the owner stopped while we waited
@@ -398,6 +420,11 @@ class BackupRunner:
         self.live["part_bytes"] = self.live.get("part_bytes", 0) + n
         self.meter.add(self.bytes_run)
 
+    def _file_done(self):
+        self.files_run += 1
+        self.live["part_files"] = self.live.get("part_files", 0) + 1
+        self.fmeter.add(self.files_run)
+
     async def _build(self, client, n: int):
         j = self.job
         a, b = j["plan"][n - 1]
@@ -408,15 +435,24 @@ class BackupRunner:
         chan_id = j["db_channel"]["id"]
         w = C.PartWriter(path)
         files, junk, failed = [], [], []
+        t_build = time.monotonic()
+        stats = {}
         try:
             mongo = await self._add_mongo(w) if n == 1 else None
-            for it in items:
-                rec, err = await self._add_file(client, w, chan_id, it, junk)
-                self.live["part_files"] = self.live.get("part_files", 0) + 1
-                if rec:
-                    files.append(rec)
-                else:
-                    failed.append({"key": it["key"], "msg_id": it["msg_id"], "reason": err})
+            # downloads run AHEAD of the writer (several files / stripes at once, bounded RAM); the zip is still
+            # written one entry at a time in plan order, so the manifest order never changes
+            async with Prefetcher(self.clients or [client], chan_id, [it["msg_id"] for it in items],
+                                  transfers=self.transfers) as pf:
+                try:
+                    for i, it in enumerate(items):
+                        rec, err = await self._add_file(pf, w, i, it, junk)
+                        self._file_done()
+                        if rec:
+                            files.append(rec)
+                        else:
+                            failed.append({"key": it["key"], "msg_id": it["msg_id"], "reason": err})
+                finally:
+                    stats = dict(pf.stats)
             links = await self._link_records(files)
             manifest = {"format": C.FORMAT, "v": C.VERSION, "set_id": j["set_id"], "date": j["date"], "part": n,
                         "total_parts": j["total_parts"], "created": j["created"], "built": time.time(),
@@ -429,8 +465,18 @@ class BackupRunner:
         if failed:
             skipped = (self.job.get("skipped") or []) + failed
             await self._save(skipped=skipped[:SKIP_KEEP], skipped_n=self.job.get("skipped_n", 0) + len(failed))
+        dt = max(1e-6, time.monotonic() - t_build)
+        data = sum(f["size"] for f in files)
+        mbps = data / dt / C.MiB
+        self.last_stats = stats
+        self.live["last_mbps"] = mbps
+        log.info("Part %d built: %s of media in %.1fs = %.1f MB/s, %.1f files/s (%d files, %d failed) | "
+                 "peak buffer %.0f MB, peak in-flight %d, peak open files %d, batches %d, ref refreshes %d, "
+                 "stripe retries %d", n, C.human(data), dt, mbps, len(items) / dt, len(items), len(failed),
+                 stats.get("peak_buffer", 0) / C.MiB, stats.get("peak_inflight", 0), stats.get("peak_files", 0),
+                 stats.get("batches", 0), stats.get("refreshes", 0), stats.get("stripe_retries", 0))
         rec = {"n": n, "name": name, "size": size, "files": len(items), "stored": len(files),
-               "bytes": sum(f["size"] for f in files), "delivered": False}
+               "bytes": data, "delivered": False, "build_s": round(dt, 1), "build_mbps": round(mbps, 1)}
         return rec, path
 
     async def _add_mongo(self, w: C.PartWriter) -> dict:
@@ -449,29 +495,31 @@ class BackupRunner:
         return {"path": C.MONGO_ENTRY, "size": ent.size, "sha256": ent.sha256,
                 "counts": self.job.get("mongo_counts", {})}
 
-    async def _add_file(self, client, w: C.PartWriter, chan_id, it: dict, junk: list):
-        """Stream one file into the part. Returns (manifest entry, "") or (None, reason)."""
+    async def _add_file(self, pf: Prefetcher, w: C.PartWriter, i: int, it: dict, junk: list):
+        """Write file `i` of the part into the zip (its bytes were / are being downloaded ahead by the prefetcher).
+        Returns (manifest entry, "") or (None, reason)."""
         err = "unknown error"
         for attempt in range(3):
-            ent = None
+            ent = fx = None
             try:
-                msg = (await get_messages(client, chan_id, [it["msg_id"]]))[0]
-                info, why = describe(msg)
+                fx = await pf.fetch(i, retry=bool(attempt))
+                info = fx.info
                 if not info:
-                    return None, why
+                    return None, fx.err
                 size = info["size"]
                 arc = C.media_path(it["token"], it["idx"], info["file_name"] or it["name"], info["kind"])
                 if attempt:
                     arc += f".r{attempt}"
                 ent = w.entry(arc, size)
-                async for chunk in iter_media(client, msg, size, PREFETCH):
-                    await asyncio.to_thread(ent.write, chunk)
-                    self._tick(len(chunk))
+                async with aclosing(fx.blocks()) as blocks:
+                    async for block in blocks:
+                        await asyncio.to_thread(ent.write, block)       # one thread hop per 4-8 MiB block
+                        self._tick(len(block))
                 ent.close()
                 if size and ent.size != size:
                     raise IOError(f"size mismatch ({ent.size} of {size} bytes)")
                 thumb = None
-                data = await download_thumb(client, info["thumb_fid"])
+                data = await fx.thumb()                                  # downloaded in parallel with the media
                 if data:
                     tp = C.thumb_path(it["token"], it["idx"])
                     thumb = {"path": tp, "sha256": w.add_bytes(tp, data)}
@@ -497,6 +545,9 @@ class BackupRunner:
                     except Exception:
                         pass
                 await asyncio.sleep(2 * (attempt + 1))
+            finally:
+                if fx is not None:
+                    fx.close()                           # frees the buffer budget, cancels stripes still running
         return None, err
 
     async def _link_records(self, files: list) -> list:
@@ -660,7 +711,14 @@ class BackupRunner:
                  f"FILES ▸ <b>{done:,}/{j.get('total_files', 0):,}</b>",
                  f"STEP ▸ <b>{labels.get(step, step or '…')}</b>"]
         if st == "running":
-            lines.append(f"SPEED ▸ <b>{C.human(self.meter.speed())}/S</b> · ETA <b>{C.eta_text(eta)}</b>")
+            fps = self.fmeter.speed() if step == "building" else 0
+            lines.append(f"SPEED ▸ <b>{C.human(self.meter.speed())}/S</b>"
+                         + (f" · <b>{fps:.1f}</b> FILES/S" if step == "building" else "")
+                         + f" · ETA <b>{C.eta_text(eta)}</b>")
+            if self.live.get("last_mbps") and step != "building":
+                lines.append(f"LAST PART BUILT AT ▸ <b>{self.live['last_mbps']:.1f} MB/S</b>")
+            for wmsg in self.live.get("warn") or []:
+                lines.append(f"⚠️ <i>{esc(wmsg[:160])}</i>")
             if step == "uploading":
                 size = self.live.get("size") or 1
                 lines.append(f"UPLOAD ▸ <b>{self.live.get('up_bytes', 0) * 100 // size}%</b> · "
