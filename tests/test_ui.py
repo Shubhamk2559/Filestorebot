@@ -79,7 +79,7 @@ S._data["admins"] = [42]
 S._data["db_channel"] = {"id": -100, "title": "Store Chan"}
 S.set = AsyncMock()          # no database in the tests
 
-from handlers import admin, analytics, autoposter, backup, broadcast, contact, start, transfer, upload, usage  # noqa: E402,F401
+from handlers import admin, analytics, autoposter, backup, broadcast, contact, start, transfer, upload, usage, zipvault  # noqa: E402,F401
 from utils import keyboards as K  # noqa: E402
 from utils import ui  # noqa: E402
 
