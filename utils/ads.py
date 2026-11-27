@@ -23,6 +23,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import secrets
 import time
@@ -477,7 +478,7 @@ async def postback(request):
 def _boot_json() -> str:
     return json.dumps({"zone": zone(), "sdk": sdk_url(), "tries": int(S.get("ads_tries") or 3),
                        "strict": bool(S.get("ads_block_adblock")), "postback": bool(S.get("ads_postback")),
-                       "probes": PROBES}).replace("</", "<\\/")
+                       "probes": PROBES, "support": SUP.url() or ""}).replace("</", "<\\/")
 
 
 async def page(request):
@@ -485,8 +486,23 @@ async def page(request):
         "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})
 
 
+GUIDE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static", "guide")
+GUIDE_FILES = {"step1-settings.png", "step2-search.png", "step3-provider.png", "step4-off.png"}
+
+
+async def guide_image(request):
+    """Private-DNS how-to screenshots shown on the 'Ad blocker detected' screen. Served as-is (original, uncompressed)."""
+    name = request.match_info["name"]
+    path = os.path.join(GUIDE_DIR, name)
+    if name not in GUIDE_FILES or not os.path.isfile(path):
+        raise web.HTTPNotFound()
+    return web.FileResponse(path, headers={"Content-Type": "image/png", "Cache-Control": "public, max-age=86400",
+                                           "X-Content-Type-Options": "nosniff"})
+
+
 def setup_routes(app: web.Application):
     app.router.add_get("/ad", page)
+    app.router.add_get("/assets/guide/{name}", guide_image)
     app.router.add_post("/api/ad/init", api_init)
     app.router.add_post("/api/ad/probe", api_probe)
     app.router.add_post("/api/ad/attempt", api_attempt)

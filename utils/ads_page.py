@@ -40,6 +40,21 @@ PAGE = r"""<!doctype html>
   .steps{text-align:left;margin:16px 0 0;padding:12px 14px 12px 32px;color:var(--muted);font-size:14px;line-height:1.55;
     background:#eef8fe;border:1px solid #cfe8f9;border-radius:12px}
   .steps li{margin:5px 0}.steps b{color:var(--ink)}
+  .guide{text-align:left;margin:18px 0 0}
+  .gt{font-weight:700;font-size:1.05rem;color:var(--ink);margin:0 0 4px}
+  .gs{font-size:13.5px;line-height:1.5;margin:0 0 10px}
+  .gstep{margin:0 0 16px}
+  .gh{display:flex;align-items:flex-start;gap:10px;font-size:14.5px;line-height:1.45;color:var(--ink)}
+  .gh .n{flex:0 0 26px;height:26px;border-radius:50%;background:var(--sky);color:var(--ink);font-weight:700;font-size:14px;
+    display:flex;align-items:center;justify-content:center}
+  .gh span:last-child{padding-top:2px}
+  .gimg{display:block;width:100%;height:auto;margin-top:8px;border-radius:14px;border:1px solid #cfe8f9;background:#eef8fe}
+  .note{margin:4px 0 0;padding:12px 14px;border-radius:12px;background:#eef8fe;border:1px solid #cfe8f9;
+    color:var(--muted);font-size:14px;line-height:1.55}
+  .note b{color:var(--ink)}
+  .note ol{margin:6px 0 8px;padding-left:20px}.note li{margin:3px 0}
+  button.alt{margin-top:10px;background:#fff;border:2px solid var(--sky)}
+  button.alt:active{background:#eef8fe}
   .on{margin-top:18px;color:var(--muted);font-size:14px;font-weight:600}
   .on b{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sky-d);margin-right:8px}
   @media (prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}}
@@ -58,8 +73,37 @@ PAGE = r"""<!doctype html>
       <li>Turn off ad-blocking VPN / DNS apps (Blokada, AdGuard, DNS66…)</li>
       <li>Then tap <b>Check again</b></li>
     </ol>
+    <div class="guide hide" id="guide">
+      <div class="gt">How to turn off Private DNS</div>
+      <p class="gs">Follow the pictures below. Menu names can look a little different on your phone.</p>
+      <div class="gstep">
+        <div class="gh"><span class="n">1</span><span>Open your phone <b>Settings</b></span></div>
+        <img class="gimg" src="/assets/guide/step1-settings.png" width="1189" height="1323" loading="lazy" decoding="async" alt="Phone Settings screen">
+      </div>
+      <div class="gstep">
+        <div class="gh"><span class="n">2</span><span>Type <b>Private DNS</b> in the search bar and open it</span></div>
+        <img class="gimg" src="/assets/guide/step2-search.png" width="1189" height="1323" loading="lazy" decoding="async" alt="Searching for Private DNS in Settings">
+      </div>
+      <div class="gstep">
+        <div class="gh"><span class="n">3</span><span>If <b>Private DNS provider</b> is selected (for example <b>dns.adguard.com</b>), this is what blocks the ad</span></div>
+        <img class="gimg" src="/assets/guide/step3-provider.png" width="1189" height="1323" loading="lazy" decoding="async" alt="Private DNS provider is selected">
+      </div>
+      <div class="gstep">
+        <div class="gh"><span class="n">4</span><span>Select <b>Off</b></span></div>
+        <img class="gimg" src="/assets/guide/step4-off.png" width="1189" height="1323" loading="lazy" decoding="async" alt="Private DNS set to Off">
+      </div>
+      <div class="note">
+        <b>After you turn it Off:</b>
+        <ol>
+          <li>Close Telegram completely, then open it again.</li>
+          <li>Tap your file link again.</li>
+        </ol>
+        Still not working? Send a screenshot to <b>Support</b>.
+      </div>
+    </div>
     <div class="spin" id="spin"></div>
     <button id="btn" class="hide">Check again</button>
+    <button id="sup" class="alt hide">Contact Support</button>
   </div>
   <div class="on"><b></b>Always Online</div>
 </main>
@@ -79,7 +123,14 @@ function ui(icon,title,text,o){
   $("title").textContent=title; $("text").textContent=text||"";
   $("spin").classList.toggle("hide",!o.spin);
   $("steps").classList.toggle("hide",!o.steps);
+  $("guide").classList.toggle("hide",!o.steps);
+  $("sup").classList.toggle("hide",!(o.steps&&cfg.support));
   var b=$("btn"); b.classList.toggle("hide",!o.btn); if(o.btn) b.textContent=o.btn;
+}
+function openSupport(){
+  if(!cfg.support) return;
+  try{ if(tg&&tg.openTelegramLink){ tg.openTelegramLink(cfg.support); return; } }catch(e){}
+  window.open(cfg.support,"_blank");
 }
 function waitClick(){return new Promise(function(res){var b=$("btn");b.onclick=function(){b.onclick=null;res()}})}
 
@@ -188,6 +239,8 @@ function finalMsg(state){
   else if(state==="too_many") ui("⚠️","Too many tries","Go back to the chat and open your file link again.");
   else ui("⌛","Session ended","Go back to the chat and open your file link again.");
 }
+
+$("sup").onclick=openSupport;
 
 async function run(){
   if(!tg||!tg.initData){ ui("⚠️","Open inside Telegram","This page works only from the bot's button in Telegram."); return; }
