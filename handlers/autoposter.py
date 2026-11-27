@@ -27,6 +27,7 @@ from handlers.admin import PAGE, action, ask, ask_chat, resolve_channel, show, s
 from handlers.upload import media_info
 from utils import autoposter as AP
 from utils import batch as BT
+from utils import zipvault as ZV
 from utils import keyboards as K
 from utils.keyboards import nm, pager, ub as U
 from utils.ui import ago, hl, styled
@@ -175,6 +176,8 @@ async def show_queue(update, cid: int, note: str = ""):
         ready = [p for p in pend if float(p.get("not_before") or 0) <= now]
         wait = [p for p in pend if float(p.get("not_before") or 0) > now]
         todo, _ = await BT.counts(cid)
+        thumb_wait = await ZV.waiting_count(cid)
+        todo = max(0, todo - thumb_wait)
         gap, min_h = BT.settings_of(ch)
         lines = [f"• #{p['seq']} {html.escape(p['title'][:26])} — IN {max(1, int((p['not_before'] - now) // 86400))} D"
                  for p in wait[:8]]
@@ -182,7 +185,8 @@ async def show_queue(update, cid: int, note: str = ""):
                    head
                    + f"✅ POSTED: <b>{posted}</b> · READY: <b>{len(ready)}</b> · WAITING: <b>{len(wait)}</b>\n"
                    f"⚙️ PREPARING: <b>{todo}</b> FOLDERS\n"
-                   f"📆 GAP: <b>{gap}</b> D · <b>{min_h:g}</b> H\n"
+                   + (f"🖼 WAITING FOR THUMBNAIL: <b>{thumb_wait}</b> FOLDERS\n" if thumb_wait else "")
+                   + f"📆 GAP: <b>{gap}</b> D · <b>{min_h:g}</b> H\n"
                    f"🕓 LAST POSTED: <b>{ago(qs.get('last_posted_at'))}</b>\n\n"
                    "<b>WAITING</b>\n" + ("\n".join(lines) if lines else "<i>NONE</i>"),
                    M([[U("🔄 Refresh", f"adm:apq:{cid}")], [U("🔙 Back", f"adm:apc:{cid}")]]))
@@ -702,9 +706,17 @@ async def a_apnew(update, context, args):
     ch = await db.ap_get_channel(cid) or {}
     t = ch.get("ptype") or "classic"
     if t == "batch":
-        how = ("SEND THE FIRST + LAST MESSAGE LINK OF THE RANGE.\nEACH FOLDER ENDS WITH A TEXT CONTAINING “UPLOADED”."
+        waiting = await ZV.waiting_count(cid)
+        busy = await ZV.preparing_count(cid)
+        how = ("📦 ZIP — SEND ZIPS (FOLDERS WITH IMAGES + VIDEOS). IMAGES → imgbb (ORIGINAL QUALITY) → TELEGRAPH, "
+               "VIDEOS → ONE LINK PER FOLDER. THEN YOU CHOOSE THE THUMBNAILS.\n"
+               "🔢 RANGE — FIRST + LAST MESSAGE LINK OF A SOURCE CHANNEL (FOLDERS END WITH A TEXT WITH “UPLOADED”)."
+               + (f"\n\n🖼 WAITING FOR THUMBNAIL: {waiting} FOLDER(S)" if waiting else "")
+               + (f"\n⚙️ PREPARING LINKS: {busy} FOLDER(S)" if busy else "")
                + ("" if BT.enabled() else "\n\n⚠️ ADD AN IMGBB KEY FIRST (CAPTION → IMGBB KEYS)."))
-        kb = M([[U("🔢 Range", f"adm:aprange:{cid}")], [U("🔙 Back", f"adm:apc:{cid}")]])
+        kb = M([[U("📦 ZIP Upload", f"adm:zvnew:{cid}"), U("🔢 Range", f"adm:aprange:{cid}")],
+                [U(f"🖼 Thumbnails ({waiting})", f"adm:zvthumb:{cid}")],
+                [U("🔙 Back", f"adm:apc:{cid}")]])
     else:
         if t == "pair":
             how = ("SEND IMAGE, VIDEO, IMAGE, VIDEO… IN ORDER.\nEACH PAIR = 1 POST."

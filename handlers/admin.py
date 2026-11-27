@@ -48,7 +48,8 @@ PAGE = 8
 MAX_RANGE = 10000
 TEMP_KEYS = ("state", "batch_ids", "batch_status", "batch_token", "restore_status", "restore_n", "range_first",
              "bc_msg", "ap_cid", "ap_items", "ap_status", "ap_src", "ap_ts", "tr_dl", "tr_src", "tr_dst", "tr_cl",
-             "tr_wp", "pick_state", "pick_kind", "picked_chat", "ct_uid")
+             "tr_wp", "pick_state", "pick_kind", "picked_chat", "ct_uid",
+             "zv_cid", "zv_zips", "zv_bid", "zv_thumbs", "zv_skip", "zv_status", "zv_ts")
 
 ACTIONS = {}
 STATES = {}
