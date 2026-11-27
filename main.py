@@ -20,8 +20,8 @@ import config
 from database import db
 from handlers import admin, start, upload
 from handlers import autoposter as _autoposter  # noqa: F401  (registers the Autoposter panel screens)
-from handlers import zipvault as _zipvault      # noqa: F401  registers the Vault Pack ZIP upload + thumbnail screens
 from handlers import backup as _backup          # noqa: F401  registers the Backup / Restore screens
+from handlers import localbackup as _localbackup  # noqa: F401  registers Local Database Backup / Recover From Zip
 from handlers import analytics as _analytics    # noqa: F401  registers the Earnings / Analytics screens
 from handlers import transfer as _transfer      # noqa: F401  registers the Transfer screens (user-account channel copy)
 from handlers import usage as _usage            # noqa: F401  registers the VPS Usage / Plan advice screens
@@ -29,6 +29,7 @@ from handlers import joinreq                    # Join Request Approval (silent,
 from handlers import contact                    # users can message the owner through the bot (fallback)
 from handlers import support                    # Support Bot: second bot, one forum topic per user
 from utils.backup import backup_loop
+from utils import lbbackup, lbrestore
 from utils import padding
 from utils import chats as _chats
 from utils.links import register_bot
@@ -48,6 +49,9 @@ async def post_init(app):
     await db.init_db()                                   # connect, indexes, load cached settings
     app.bot_data["health"] = await start_web_server(config.PORT, app.bot)   # /health + /<token> redirect + ads Mini App
     await mtproto.start()                                # optional MTProto session (Autoposter range / preview) - needs API_ID, API_HASH
+    _localbackup.setup(app.bot)                          # web upload page -> "upload finished" notice
+    await lbbackup.on_startup(app.bot)                   # clean leftover temp parts, resume an interrupted local backup
+    await lbrestore.on_startup(app.bot)                  # resume an interrupted Recover
     app.bot_data["gc"] = asyncio.create_task(autodelete_loop(app.bot))
     app.bot_data["ap"] = asyncio.create_task(autopost_loop(app.bot))     # Autoposter scheduler
     app.bot_data["bt"] = asyncio.create_task(batch_loop(app.bot))        # Vault Pack worker (imgbb / Telegraph, resumable)
@@ -62,6 +66,8 @@ async def post_init(app):
 
 
 async def post_shutdown(app):
+    await lbbackup.runner.shutdown()                     # state stays "running" in MongoDB -> resumes after the restart
+    await lbrestore.restorer.shutdown()
     await support.runtime.stop()
     await mtproto.stop()
     from utils.transfer import session as _tr_session

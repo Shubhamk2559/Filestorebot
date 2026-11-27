@@ -18,6 +18,11 @@ for v in BOT_TOKEN OWNER_ID MONGO_URI DOMAIN; do
 done
 
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+
+# Local Database Backup / Recover folders (the bot runs as uid 10001 inside the container)
+RDIR="$(grep -E '^RESTORE_HOST_DIR=' .env | head -1 | cut -d= -f2- || true)"; RDIR="${RDIR:-./restore}"
+TDIR="$(grep -E '^BK_TMP_HOST_DIR=' .env | head -1 | cut -d= -f2- || true)"; TDIR="${TDIR:-./backup_tmp}"
+$SUDO mkdir -p "$RDIR" "$TDIR" && $SUDO chown -R 10001:10001 "$RDIR" "$TDIR"
 if ! command -v docker >/dev/null 2>&1; then
   echo "📦 Installing Docker..."
   curl -fsSL https://get.docker.com | $SUDO sh

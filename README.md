@@ -121,36 +121,26 @@ Autoposter → channel → 🎭 Post Type (cycles 🔥 Solo Drop → 💎 Duo Re
 * Caption tags (Vault Pack channels only, otherwise they stay as typed): `{Preview Image}`, `{Video Link}`, `{Post Number}`. The number is taken at posting time (last + 1, no repeat, no gap).
 * 🎨 Caption & Button → imgbb API Keys / Telegraph Title (`{folder_name}`) / Post Number.
 
-## 📦 Vault Pack - ZIP upload (new)
-
-Autoposter → channel (type 👑 Vault Pack) → ➕ Create Post → **📦 ZIP Upload**.
-
-**ZIP layout:** one ZIP = many folders, one folder = many images + videos. A single wrapper folder inside the ZIP is skipped;
-files inside sub-folders belong to their first-level folder; "Wedding Uploaded ✅" style names are shortened to "Wedding".
-```
-pack.zip
-  Wedding/  1.jpg 2.jpg ... clip1.mp4 clip2.mp4
-  Puja/     a.png b.png ... video.mp4
-```
-**Steps**
-1. Send one or more `.zip` files (as *file*) → **▶️ Start**. The bot downloads, unpacks and queues one job per folder.
-2. Per folder, in the background and resumable (restart / empty imgbb key = it pauses and continues):
-   * **images → imgbb → ONE Telegraph article** - the original bytes are uploaded, nothing is compressed, resized or re-encoded
-     (imgbb limit: 32 MB per image; jpg / png / gif / webp / bmp). Very big folders are split into linked Telegraph parts.
-   * **videos → Database Channel → ONE file-store link** per folder.
-3. When the links are ready you get a message with **🖼 Thumbnails** (also in Create Post and Queue).
-4. The bot names a folder - you send its thumbnail(s):
-   * 1 image → 1 post · 2 images → 2 posts · … (same Telegraph + video link, different thumbnail, normal Vault Pack gap rules)
-   * **✅ Done** create the posts · **📌 Fixed Thumbnail** no image, use the channel's fixed thumbnail (1 post)
-   * **⏭ Skip** decide later · **📌 Fixed For All Left** · **⏹ Stop** (folders keep waiting, nothing is lost)
-
-Notes: ZIPs over 20 MB and big videos need `API_ID` + `API_HASH` (MTProto). `ffmpeg` (in the Docker image) gives uploaded videos
-duration / size / preview. Unpacked files live in `ZIP_WORK_DIR` (`/data/zipwork`, a docker volume) and are deleted file by file.
-Offline test: `python3 tests/test_zipscan.py`
-
 ## 5. Panel design
 One style everywhere (`utils/ui.py` text, `utils/keyboards.py` buttons): bold CAPS heading, minimal CAPS description,
 `LABEL ▸ VALUE` lines, CAPS buttons in two columns, BACK / CLOSE / CANCEL full width. Channel names, captions and
 post / link titles keep their own case. Settings values are shown only inside their own screen, never in the parent menu.
 
 Offline UI test (no Telegram / MongoDB needed): `python3 tests/test_ui.py`
+
+## 💽 Local Database Backup / ♻️ Recover From Zip (Panel → Backup, owner only)
+If the Database Channel is deleted or suspended: create a new channel, add the bot as admin, set it under **Settings → DB Channel**,
+tap **♻️ Recover From Zip**, pick your backup parts. Every file returns with its caption, order and **old share links**.
+
+**Backup** (💽 Database Backup (Local)): reads every file over MTProto, builds `dbbackup_YYYYMMDD_part001.zip …` (default 1.5 GB, change with 📦 Part Size),
+verifies it (sha256 + zip CRC), sends it to you, and **deletes it from the VPS only after delivery is confirmed** (Telegram returned the message, or you tapped
+✅ Downloaded on the protected link page). Then the next part starts. 3 failed uploads = paused, nothing deleted, you decide. ⏹ Stop = stops after the current part.
+Survives restarts (state in MongoDB `lb_jobs` / `lb_items`). Part 1 also holds the full MongoDB export. `dbbackup_index.json` (all parts + sha256) is sent at the end.
+
+**Recover**: copy the parts (and `dbbackup_index.json`) into the VPS restore folder, or use 🌐 Upload Page (chunked, resumable). Missing parts are reported before
+start; parts can be processed in any order and in several runs. Files are checked by sha256, uploaded with the exact caption + hidden backup code, and the same link
+token / slot is pointed at the new message. Running Recover again never uploads a file twice. A part is deleted from the VPS only when all its files are restored.
+The final report lists restored / skipped / failed (with reasons) and whether every link resolves.
+
+New optional env vars (all have defaults): `RESTORE_HOST_DIR` (default `./restore`), `BK_TMP_HOST_DIR` (default `./backup_tmp`), `LR_PACE` (seconds between recover uploads, 3), `LB_PREFETCH` (parallel chunks, 4).
+Needs `API_ID` + `API_HASH`, and the owner must have pressed /start in the bot.

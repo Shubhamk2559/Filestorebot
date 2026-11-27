@@ -41,3 +41,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # Storage quota of your MongoDB plan in MB (Atlas free M0 = 512) - used for the "storage left" bar in Stats
 MONGO_LIMIT_MB = float(os.getenv("MONGO_LIMIT_MB", "512"))
+
+# ---- Local Database Backup / Recover (utils/lbbackup.py, utils/lbrestore.py)
+# Folder where the ONE zip part being built lives (emptied on start-up and after every part).
+BK_TMP_DIR = os.getenv("BK_TMP_DIR", "/app/backup_tmp").strip() or "/app/backup_tmp"
+# Folder with the backup parts to recover from (docker-compose mounts it from the VPS, see RESTORE_HOST_DIR).
+RESTORE_DIR = os.getenv("RESTORE_DIR", "/restore").strip() or "/restore"
