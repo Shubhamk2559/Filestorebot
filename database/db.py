@@ -10,6 +10,7 @@ Collections
   pending_deletes scheduled auto-deletes (survive bot restarts)
   ap_channels     Autoposter target channels/groups (timings, ON/OFF, loop mode, shuffled queue_state)
   ap_posts        Autoposter posts (thumbnail + share-link token + posted flag)
+  ap_groups       Autoposter share groups: channels that post from ONE common pool (no repeats, 7-day gap)
 """
 import copy
 import datetime as dt
@@ -48,6 +49,7 @@ ads_col = db["ad_sessions"]      # one-time Mini App ad sessions (auto-expire)
 usage_col = db["daily_usage"]   # _id="<user_id>:<YYYY-MM-DD>", used=<links opened today>
 ap_channels_col = db["ap_channels"]   # Autoposter targets: _id=chat id, slots, enabled, done
 ap_posts_col = db["ap_posts"]         # Autoposter posts: _id=share-link token, chan=chat id, seq, posted
+ap_groups_col = db["ap_groups"]       # Autoposter SHARE GROUPS: _id=group id, members=[chat ids], queue_state (one shared shuffled queue)
 ap_batches_col = db["ap_batches"]     # Vault Pack jobs (post type 3): resumable imgbb / Telegraph / file-store work - utils/batch.py
 vps_col = db["vps_usage"]             # _id="YYYY-MM-DD-HH" (IST): hourly VPS samples (cpu, ram, network) - utils/usage.py
 stats_col = db["daily_stats"]         # _id="YYYY-MM-DD" (IST): views, gates, imp, clk, valued, rev, verified, fallback, blocked
@@ -397,6 +399,7 @@ async def _drop_posts(found: list, seen: set) -> list:
     await ap_posts_col.delete_many({"_id": {"$in": ids}})
     for cid in {p["chan"] for p in found}:
         await ap_channels_col.update_one({"_id": cid}, {"$pull": {"queue_state.queue": {"$in": ids}}})
+    await ap_groups_col.update_many({}, {"$pull": {"queue_state.queue": {"$in": ids}}})
     for p in found:
         if p.get("thumb_token"):
             code = make_code(p["thumb_token"], 0)
@@ -602,11 +605,22 @@ async def ap_list_channels():
     return await ap_channels_col.find({}).sort("created", 1).to_list(200)
 
 
+# Settings that are the SAME for every channel of a share group (only the timings / ON-OFF stay per channel).
+GROUP_SHARED = ("cap_tpl", "btn", "btn_img", "btn_vid", "fthumb", "ads_n", "cost", "loop")
+GROUP_GAP_DAYS = 7          # a post that went to one channel of a group may not go to ANY channel of it again within this
+
+
 async def ap_set(cid: int, **fields):
     await ap_channels_col.update_one({"_id": cid}, {"$set": fields})
+    shared = {k: v for k, v in fields.items() if k in GROUP_SHARED}
+    if shared:                                           # caption / button / thumbnail / ads / limit / loop: whole group
+        gid = ((await ap_channels_col.find_one({"_id": cid}, {"group": 1})) or {}).get("group")
+        if gid:
+            await ap_channels_col.update_many({"group": gid}, {"$set": shared})
 
 
 async def ap_remove_channel(cid: int):
+    await ap_group_leave(cid)
     await ap_channels_col.delete_one({"_id": cid})
     await ap_posts_col.delete_many({"chan": cid})
     await ap_batches_col.delete_many({"chan": cid})
@@ -731,6 +745,9 @@ async def ap_enqueue_new(cid: int, tokens: list):
     if not tokens:
         return
     ch = await ap_channels_col.find_one({"_id": cid})
+    if (ch or {}).get("group"):                   # channel of a share group: the group's pool queue
+        await ap_group_enqueue_new(ch["group"], tokens)
+        return
     qs = (ch or {}).get("queue_state") or {}
     queue, cursor = list(qs.get("queue") or []), int(qs.get("cursor", 0))
     if not queue or cursor >= len(queue):
@@ -772,6 +789,237 @@ async def ap_upcoming(cid: int, limit: int = 10) -> list:
         return []
     docs = {d["_id"]: d for d in await ap_posts_col.find({"_id": {"$in": window}, "chan": cid}).to_list(None)}
     return [docs[t] for t in window if t in docs and not docs[t].get("posted")][:limit]
+
+
+# ---- SHARE GROUPS: several channels, ONE pool of posts, each channel keeps its own timings.
+# Pool = every (non-Vault-Pack) post whose chan is a member. One shared shuffled queue; a slot of ANY member takes the next
+# post with an atomic, version-checked claim -> two channels (or two servers) can never take the same post.
+def _gblank() -> dict:
+    return {"cycle": 0, "cursor": 0, "queue": [], "ver": 0, "last_reshuffled_at": None, "last_post_id": None}
+
+
+def _pool_filter(members) -> dict:
+    return {"chan": {"$in": list(members)}, "ptype": {"$ne": "batch"}}
+
+
+async def ap_group_get(gid: str):
+    return await ap_groups_col.find_one({"_id": gid})
+
+
+async def ap_group_members(gid: str) -> list:
+    g = await ap_groups_col.find_one({"_id": gid})
+    return await ap_channels_col.find({"_id": {"$in": (g or {}).get("members", [])}}).to_list(None)
+
+
+async def ap_group_total(gid: str) -> int:
+    g = await ap_groups_col.find_one({"_id": gid})
+    return await ap_posts_col.count_documents(_pool_filter((g or {}).get("members", [])))
+
+
+async def ap_group_share(cid: int, other: int):
+    """Put channel `cid` and channel `other` in one share group. Returns (gid, why): why is None on success,
+    else 'missing' / 'batch' / 'two_groups' / 'same'.
+    Settings: the channel that is ALREADY in a group keeps the group's settings (the other one adopts them);
+    if neither is in a group, the channel the admin opened (`cid`) gives its settings to `other`."""
+    a = await ap_channels_col.find_one({"_id": cid})
+    b = await ap_channels_col.find_one({"_id": other})
+    if not a or not b or cid == other:
+        return None, "missing"
+    if a.get("ptype") == "batch" or b.get("ptype") == "batch":
+        return None, "batch"
+    ga, gb = a.get("group"), b.get("group")
+    if ga and gb:
+        return (ga, "same") if ga == gb else (None, "two_groups")
+    if ga:
+        gid, src, new = ga, a, b
+    elif gb:
+        gid, src, new = gb, b, a
+    else:
+        gid, src, new = "g" + secrets.token_hex(3), a, b
+        await ap_groups_col.insert_one({"_id": gid, "members": [src["_id"]], "gap_days": GROUP_GAP_DAYS,
+                                        "created": time.time(), "queue_state": _gblank()})
+        await ap_channels_col.update_one({"_id": src["_id"]}, {"$set": {"group": gid}})
+    await ap_groups_col.update_one({"_id": gid}, {"$addToSet": {"members": new["_id"]}})
+    adopt = {k: src[k] for k in GROUP_SHARED if k in src}
+    await ap_channels_col.update_one({"_id": new["_id"]}, {"$set": {"group": gid, **adopt}})
+    g = await ap_groups_col.find_one({"_id": gid})
+    qs = g.get("queue_state") or {}
+    if qs.get("queue") and int(qs.get("cursor", 0)) < len(qs["queue"]):       # running cycle: mix the new channel's posts in
+        toks = [d["_id"] for d in await ap_posts_col.find(
+            {"chan": new["_id"], "posted": False, "ptype": {"$ne": "batch"}}, {"_id": 1}).to_list(None)]
+        await ap_group_enqueue_new(gid, toks)
+    else:
+        await ap_group_rebuild(gid, only_unused=True)
+    return gid, None
+
+
+async def ap_group_leave(cid: int):
+    """Take a channel out of its group. Its posts stay with it; both sides get their own queue back."""
+    ch = await ap_channels_col.find_one({"_id": cid})
+    gid = (ch or {}).get("group")
+    if not gid:
+        return
+    await ap_channels_col.update_one({"_id": cid}, {"$unset": {"group": ""}})
+    g = await ap_groups_col.find_one_and_update({"_id": gid}, {"$pull": {"members": cid}},
+                                                return_document=ReturnDocument.AFTER)
+    left = list((g or {}).get("members", []))
+    await ap_rebuild_cycle(cid, only_unused=True)
+    if len(left) <= 1:                                   # a group of one is no group
+        for m in left:
+            await ap_channels_col.update_one({"_id": m}, {"$unset": {"group": ""}})
+            await ap_rebuild_cycle(m, only_unused=True)
+        await ap_groups_col.delete_one({"_id": gid})
+
+
+async def ap_group_rebuild(gid: str, only_unused: bool = False, expect_cycle=None):
+    """New shuffled cycle of the whole pool. only_unused = just the not-yet-posted posts.
+    expect_cycle: only rebuild if the group is still in that cycle (two channels finding the cycle done at once)."""
+    g = await ap_groups_col.find_one({"_id": gid})
+    if not g:
+        return None
+    qs = g.get("queue_state") or _gblank()
+    if expect_cycle is not None and int(qs.get("cycle", 0)) != expect_cycle:
+        return g
+    flt = _pool_filter(g.get("members", []))
+    ids = [d["_id"] for d in await ap_posts_col.find({**flt, **({"posted": False} if only_unused else {})},
+                                                      {"_id": 1}).to_list(None)]
+    random.shuffle(ids)
+    last = qs.get("last_post_id")
+    if len(ids) > 1 and ids[0] == last:
+        j = random.randrange(1, len(ids))
+        ids[0], ids[j] = ids[j], ids[0]
+    ver, prev = int(qs.get("ver", 0)), int(qs.get("cycle", 0))
+    new_qs = {"cycle": prev + 1 if ids and not (only_unused and prev > 0) else prev, "cursor": 0, "queue": ids,
+              "ver": ver + 1, "last_reshuffled_at": time.time(), "last_post_id": last}
+    r = await ap_groups_col.update_one({"_id": gid, "queue_state.ver": ver}, {"$set": {"queue_state": new_qs}})
+    if r.modified_count == 1 and not only_unused:
+        await ap_posts_col.update_many(flt, {"$set": {"posted": False, "posted_at": None}})
+    return await ap_groups_col.find_one({"_id": gid})
+
+
+async def ap_group_enqueue_new(gid: str, tokens: list):
+    """New posts are mixed into the part of the running cycle that is still to be posted."""
+    for _ in range(5):
+        g = await ap_groups_col.find_one({"_id": gid})
+        qs = (g or {}).get("queue_state") or {}
+        queue, cursor, ver = list(qs.get("queue") or []), int(qs.get("cursor", 0)), int(qs.get("ver", 0))
+        if not g or not queue or cursor >= len(queue):
+            return                                       # no running cycle: the next rebuild includes them
+        new = {str(t) for t in tokens}
+        rest = [t for t in queue[cursor:] if t not in new] + sorted(new)
+        random.shuffle(rest)
+        r = await ap_groups_col.update_one(
+            {"_id": gid, "queue_state.ver": ver},
+            {"$set": {"queue_state.queue": queue[:cursor] + rest, "queue_state.ver": ver + 1}})
+        if r.modified_count == 1:
+            return
+
+
+async def ap_group_claim(gid: str, cid: int):
+    """Take the next post of the pool for channel `cid`. Returns (post, why): post None -> why is
+    'empty' (cycle finished), 'gap' (every post left was sent less than gap_days ago) or 'nogroup'.
+    The claim is a compare-and-swap on the queue version: only ONE caller gets a given post."""
+    for _ in range(8):
+        g = await ap_groups_col.find_one({"_id": gid})
+        if not g or cid not in g.get("members", []):
+            return None, "nogroup"
+        qs = g.get("queue_state") or {}
+        queue, cursor, ver = list(qs.get("queue") or []), int(qs.get("cursor", 0)), int(qs.get("ver", 0))
+        if cursor >= len(queue):
+            return None, "empty"
+        gap = float(g.get("gap_days", GROUP_GAP_DAYS)) * 86400
+        now, t0 = time.time(), float(qs.get("last_reshuffled_at") or 0)
+        window = queue[cursor:cursor + 2000]
+        docs = {d["_id"]: d for d in await ap_posts_col.find(
+            {"_id": {"$in": window}, **_pool_filter(g.get("members", []))}).to_list(None)}
+        waiting, chosen, idx = [], None, 0
+        for i, t in enumerate(window):
+            d = docs.get(t)
+            if not d:
+                continue                                  # deleted / its channel left the group -> dropped
+            if d.get("posted") and float(d.get("posted_at") or 0) >= t0:
+                continue                                  # already posted in this cycle (e.g. Post now) -> dropped
+            if now - max(float(d.get("last_sent_at") or 0), float(d.get("posted_at") or 0)) < gap:
+                waiting.append(t)                         # went out less than gap_days ago -> try again later
+                continue
+            chosen, idx = d, i
+            break
+        if chosen is None:
+            if waiting:
+                return None, "gap"
+            await ap_groups_col.update_one({"_id": gid, "queue_state.ver": ver},
+                                           {"$set": {"queue_state.cursor": len(queue), "queue_state.ver": ver + 1}})
+            continue
+        new_queue = queue[:cursor] + [chosen["_id"]] + waiting + queue[cursor + idx + 1:]
+        r = await ap_groups_col.update_one(
+            {"_id": gid, "queue_state.ver": ver},
+            {"$set": {"queue_state.queue": new_queue, "queue_state.cursor": cursor + 1, "queue_state.ver": ver + 1}})
+        if r.modified_count != 1:
+            continue                                      # somebody else claimed first -> look again
+        chosen["_prev_sent"] = chosen.get("last_sent_at")
+        await ap_posts_col.update_one({"_id": chosen["_id"]}, {"$set": {"last_sent_at": now, "last_sent_chan": cid}})
+        return chosen, None
+    return None, "busy"
+
+
+async def ap_group_done(gid: str, cid: int, token: str):
+    """The claimed post was published."""
+    now = time.time()
+    await ap_posts_col.update_one({"_id": token}, {"$set": {"posted": True, "posted_at": now}})
+    await ap_channels_col.update_one({"_id": cid}, {"$set": {"queue_state.last_posted_at": now,
+                                                              "queue_state.last_post_id": token}})
+    await ap_groups_col.update_one({"_id": gid}, {"$set": {"queue_state.last_post_id": token}})
+
+
+async def ap_group_giveback(gid: str, token: str, prev_sent, requeue: bool = True):
+    """The claimed post could not be published: forget the claim; requeue = put it back at the end of the queue
+    (the claimed entry sits BEHIND the cursor, so it is added again after it)."""
+    await ap_posts_col.update_one({"_id": token}, {"$set": {"last_sent_at": prev_sent}})
+    if not requeue:
+        return
+    for _ in range(8):
+        g = await ap_groups_col.find_one({"_id": gid})
+        qs = (g or {}).get("queue_state") or {}
+        queue, cursor, ver = list(qs.get("queue") or []), int(qs.get("cursor", 0)), int(qs.get("ver", 0))
+        if not g or token in queue[cursor:]:
+            return                                       # group gone, or already waiting in the queue
+        r = await ap_groups_col.update_one(
+            {"_id": gid, "queue_state.ver": ver},
+            {"$set": {"queue_state.queue": queue[:cursor] + queue[cursor:] + [token], "queue_state.ver": ver + 1}})
+        if r.modified_count == 1:
+            return
+
+
+async def ap_group_upcoming(gid: str, limit: int = 10) -> list:
+    g = await ap_groups_col.find_one({"_id": gid})
+    qs = (g or {}).get("queue_state") or {}
+    queue, cursor = qs.get("queue") or [], int(qs.get("cursor", 0))
+    window = queue[cursor:cursor + limit * 4]
+    if not window:
+        return []
+    docs = {d["_id"]: d for d in await ap_posts_col.find(
+        {"_id": {"$in": window}, **_pool_filter((g or {}).get("members", []))}).to_list(None)}
+    return [docs[t] for t in window if t in docs][:limit]
+
+
+async def ap_pool_counts(cid: int):
+    """(total, posted) of what this channel can post: its own posts, or the whole pool when it is in a group."""
+    ch = await ap_channels_col.find_one({"_id": cid}, {"group": 1})
+    if not (ch or {}).get("group"):
+        return await ap_counts(cid)
+    g = await ap_groups_col.find_one({"_id": ch["group"]})
+    flt = _pool_filter((g or {}).get("members", []))
+    return (await ap_posts_col.count_documents(flt),
+            await ap_posts_col.count_documents({**flt, "posted": True}))
+
+
+async def ap_pool_list(cid: int, skip: int, limit: int):
+    ch = await ap_channels_col.find_one({"_id": cid}, {"group": 1})
+    if not (ch or {}).get("group"):
+        return await ap_list_posts(cid, skip, limit)
+    g = await ap_groups_col.find_one({"_id": ch["group"]})
+    return await ap_posts_col.find(_pool_filter((g or {}).get("members", []))).sort("seq", 1).skip(skip).limit(limit).to_list(limit)
+
 
 
 async def thumb_msg_id(code: str):

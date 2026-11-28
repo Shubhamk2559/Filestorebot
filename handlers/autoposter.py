@@ -10,6 +10,7 @@ Autoposter screens of the admin panel (registered into handlers.admin's ACTIONS 
       🎭 POST TYPE    🔥 SOLO DROP / 💎 DUO REEL / 👑 VAULT PACK
       🗂 QUEUE        order of the posts          🔀 RESHUFFLE   new random order
       🔁 MODE         loop / one pass             ⏸ / ▶️         turn the channel OFF / ON
+      🔗 SHARE WITH   channels share ONE pool of posts (own timings; caption / button / thumbnail / ads / limit / mode are common)
 
 Style: same as the Admin Control Panel - CAPS bold header, one short line, CAPS buttons in a 2-column grid.
 Details (timings, counts, order) live only on the screen that owns them.
@@ -102,8 +103,12 @@ async def show_channel(update, cid: int, note: str = ""):
         return
     on = ch.get("enabled", True)
     ads_n, cost = db.chan_opts(ch)
+    grp = ""
+    if ch.get("group"):
+        names = [html.escape(m["title"][:20]) for m in await db.ap_group_members(ch["group"])]
+        grp = f"🔗 SHARED POOL WITH ▸ <b>{', '.join(n for n in names if n != html.escape(ch['title'][:20])) or '—'}</b>\n"
     await show(update,
-               f"{note}📺 <b>{html.escape(ch['title'])}</b>\n\n"
+               f"{note}📺 <b>{html.escape(ch['title'])}</b>\n\n{grp}"
                f"📺 ADS BEFORE FILE ▸ <b>{ads_n}</b>{' (NO AD)' if ads_n == 0 else ''}\n"
                f"👤 USER LIMIT USED ▸ <b>{cost}</b>{' (FREE)' if cost == 0 else ''} / {db.limit_value()} PER DAY\n"
                "APPLIES LIVE TO ALL POSTS OF THIS CHANNEL.\n\nSELECT AN OPTION TO MANAGE THIS CHANNEL.",
@@ -114,7 +119,8 @@ async def show_channel(update, cid: int, note: str = ""):
                     U("➕", f"adm:apchopt:{cid}:cost:1")],
                    [U("⏰ Timings", f"adm:aptm:{cid}"), U("📚 All Posts", f"adm:apall:{cid}:0")],
                    [U("➕ Create Post", f"adm:apnew:{cid}"), U("🎨 Caption", f"adm:apcb:{cid}")],
-                   [U("🎭 Post Type", f"adm:aptype:{cid}")],
+                   [U("🎭 Post Type", f"adm:aptype:{cid}"),
+                    U("🔗 Group" if ch.get("group") else "🔗 Share With", f"adm:apgrp:{cid}" if ch.get("group") else f"adm:apshare:{cid}")],
                    [U("🗂 Queue", f"adm:apq:{cid}"), U("🔀 Reshuffle", f"adm:apresh:{cid}")],
                    [U("🔁 Mode", f"adm:apmode:{cid}"), U("⏸ Turn OFF" if on else "▶️ Turn ON", f"adm:apon:{cid}")],
                    [U("🧹 Wipe", f"adm:apwipe:{cid}"), U("🗑 Remove", f"adm:aprm:{cid}")],
@@ -156,9 +162,13 @@ async def a_apon(update, context, args):
 async def a_aptype(update, context, args):
     cid = int(args[0])
     ch = await db.ap_get_channel(cid)
+    note = ""
     if ch:
-        await db.ap_set(cid, ptype=NEXT_TYPE.get(ch.get("ptype") or "classic", "classic"))
-    await show_channel(update, cid, f"✅ POST TYPE: <b>{_type(await db.ap_get_channel(cid) or {})}</b>\n\n")
+        nxt = NEXT_TYPE.get(ch.get("ptype") or "classic", "classic")
+        if ch.get("group") and nxt == "batch":           # Vault Pack has its own timing rules: not in a share group
+            nxt, note = "classic", "👑 VAULT PACK CANNOT BE USED IN A SHARED GROUP.\n"
+        await db.ap_set(cid, ptype=nxt)
+    await show_channel(update, cid, f"{note}✅ POST TYPE: <b>{_type(await db.ap_get_channel(cid) or {})}</b>\n\n")
 
 
 # ---------------------------------------------------------------------- queue
@@ -170,6 +180,9 @@ async def show_queue(update, cid: int, note: str = ""):
     total, posted = await db.ap_counts(cid)
     qs = ch.get("queue_state") or {}
     head = f"{note}🗂 <b>QUEUE</b> — {html.escape(ch['title'])}\n\n"
+    if ch.get("group"):
+        await show_group_queue(update, ch, head)
+        return
     if ch.get("ptype") == "batch":
         now = time.time()
         pend = await db.ap_posts_col.find({"chan": cid, "posted": False, "ptype": "batch"}).sort("not_before", 1).to_list(None)
@@ -207,6 +220,27 @@ async def show_queue(update, cid: int, note: str = ""):
                   [U("🔙 Back", f"adm:apc:{cid}")]]))
 
 
+async def show_group_queue(update, ch: dict, head: str):
+    cid, gid = ch["_id"], ch["group"]
+    g = await db.ap_group_get(gid) or {}
+    qs = g.get("queue_state") or {}
+    total, posted = await db.ap_pool_counts(cid)
+    left = max(0, len(qs.get("queue") or []) - int(qs.get("cursor", 0)))
+    nxt = AP.next_slot(ch.get("slots", []))
+    when = f"{nxt[0].strftime('%H:%M')} IST ×{nxt[1]['n']}" if nxt else "NO TIMING SET"
+    up = await db.ap_group_upcoming(gid, 8)
+    lines = [f"• #{p['seq']} {html.escape(p['title'][:30])}" for p in up]
+    await show(update,
+               head + "🔗 <b>SHARED POOL</b> (ALL CHANNELS OF THE GROUP)\n"
+               f"📚 POSTS: <b>{total}</b> · ⏳ LEFT IN CYCLE: <b>{left}</b>\n"
+               f"🔁 CYCLE: <b>{qs.get('cycle', 0)}</b> · {'LOOP' if ch.get('loop', True) else 'ONE PASS'}\n"
+               f"🕘 NEXT (THIS CHANNEL): <b>{when}</b>\n"
+               f"🕓 LAST POSTED HERE: <b>{ago((ch.get('queue_state') or {}).get('last_posted_at'))}</b>\n\n"
+               "<b>UP NEXT (POOL)</b>\n" + ("\n".join(lines) if lines else "<i>EMPTY</i>"),
+               M([[U("🔀 Reshuffle", f"adm:apresh:{cid}"), U("🔄 Refresh", f"adm:apq:{cid}")],
+                  [U("🔙 Back", f"adm:apc:{cid}")]]))
+
+
 @action("apq")
 async def a_apq(update, context, args):
     await show_queue(update, int(args[0]))
@@ -215,7 +249,11 @@ async def a_apq(update, context, args):
 @action("apresh")
 async def a_apresh(update, context, args):
     cid = int(args[0])
-    await db.ap_rebuild_cycle(cid)
+    ch = await db.ap_get_channel(cid) or {}
+    if ch.get("group"):
+        await db.ap_group_rebuild(ch["group"])           # whole pool, every post pending again
+    else:
+        await db.ap_rebuild_cycle(cid)
     await show_queue(update, cid, "🔀 QUEUE RESHUFFLED.\n\n")
 
 
@@ -243,6 +281,89 @@ async def a_aprm(update, context, args):
 async def a_aprmyes(update, context, args):
     await db.ap_remove_channel(int(args[0]))
     await show(update, "🗑 CHANNEL REMOVED.", K.back("ap"))
+
+
+# ===================================================================== share group
+@action("apshare")
+async def a_apshare(update, context, args):
+    """Pick the channel to share the posts with."""
+    cid = int(args[0])
+    ch = await db.ap_get_channel(cid)
+    if not ch:
+        await _gone(update)
+        return
+    if ch.get("ptype") == "batch":
+        await show(update, "👑 VAULT PACK CHANNELS CANNOT SHARE POSTS.", K.back(f"apc:{cid}"))
+        return
+    mine = ch.get("group")
+    rows = []
+    for c in await db.ap_list_channels():
+        if c["_id"] == cid or c.get("ptype") == "batch" or (c.get("group") and c.get("group") != mine) \
+                or (mine and c.get("group") == mine):
+            continue
+        rows.append([nm(f"📺 {c['title'][:30]}", f"adm:apshareyes:{cid}:{c['_id']}")])
+    rows.append([U("🔙 Back", f"adm:apgrp:{cid}" if mine else f"adm:apc:{cid}")])
+    await show(update,
+               f"🔗 <b>SHARE WITH</b> — {html.escape(ch['title'])}\n\n"
+               "ALL POSTS OF BOTH CHANNELS GO INTO ONE POOL. NO POST IS REPEATED, EVEN IN ANOTHER CHANNEL "
+               f"({db.GROUP_GAP_DAYS} DAYS GAP). TIMINGS STAY SEPARATE.\n"
+               + ("" if mine else "CAPTION / BUTTON / THUMBNAIL / ADS / LIMIT / MODE OF THIS CHANNEL ARE COPIED TO THE OTHER ONE.\n")
+               + ("\nTAP THE CHANNEL TO ADD." if len(rows) > 1 else "\n<i>NO OTHER CHANNEL TO ADD.</i>"),
+               M(rows))
+
+
+@action("apshareyes")
+async def a_apshareyes(update, context, args):
+    cid, other = int(args[0]), int(args[1])
+    gid, why = await db.ap_group_share(cid, other)
+    if why in (None, "same"):
+        await show_group(update, cid, "✅ <b>SHARED.</b> BOTH CHANNELS NOW POST FROM ONE POOL.\n\n")
+        return
+    msg = {"batch": "👑 VAULT PACK CHANNELS CANNOT SHARE POSTS.",
+           "two_groups": "⚠️ THE OTHER CHANNEL IS ALREADY IN ANOTHER GROUP. LEAVE IT FIRST.",
+           "missing": "⚠️ CHANNEL NOT FOUND."}.get(why, "⚠️ CANNOT SHARE.")
+    await show(update, msg, K.back(f"apc:{cid}"))
+
+
+async def show_group(update, cid: int, note: str = ""):
+    ch = await db.ap_get_channel(cid)
+    if not ch or not ch.get("group"):
+        await show_channel(update, cid) if ch else await _gone(update)
+        return
+    g = await db.ap_group_get(ch["group"]) or {}
+    qs = g.get("queue_state") or {}
+    members = await db.ap_group_members(ch["group"])
+    total = await db.ap_group_total(ch["group"])
+    left = max(0, len(qs.get("queue") or []) - int(qs.get("cursor", 0)))
+    per_day = 0
+    for m in members:
+        if m.get("enabled", True):
+            per_day += sum(int(s.get("n", 1)) for s in m.get("slots", []))
+    need = per_day * int(g.get("gap_days", db.GROUP_GAP_DAYS))
+    stock = (f"📦 STOCK ▸ <b>{total // per_day if per_day else '∞'}</b> DAYS AT <b>{per_day}</b> POSTS/DAY"
+             + (f"\n⚠️ <b>NEED {need}+ POSTS</b> TO KEEP THE {g.get('gap_days', db.GROUP_GAP_DAYS)}-DAY GAP"
+                if per_day and total < need else ""))
+    lines = [f"• {html.escape(m['title'][:26])} — {AP.fmt_slots(m.get('slots', []))}{'' if m.get('enabled', True) else ' (OFF)'}"
+             for m in members]
+    await show(update,
+               f"{note}🔗 <b>SHARED GROUP</b>\n\n" + "\n".join(lines) + "\n\n"
+               f"📚 POOL ▸ <b>{total}</b> POSTS · ⏳ LEFT IN CYCLE ▸ <b>{left}</b>\n{stock}\n\n"
+               "COMMON: CAPTION, BUTTON, THUMBNAIL, ADS, LIMIT, MODE. SEPARATE: TIMINGS, ON / OFF.",
+               M([[U("➕ Add Channel", f"adm:apshare:{cid}"), U("🔀 Reshuffle", f"adm:apresh:{cid}")],
+                  [U("🔓 Leave Group", f"adm:apleave:{cid}")],
+                  [U("🔙 Back", f"adm:apc:{cid}")]]))
+
+
+@action("apgrp")
+async def a_apgrp(update, context, args):
+    await show_group(update, int(args[0]))
+
+
+@action("apleave")
+async def a_apleave(update, context, args):
+    cid = int(args[0])
+    await db.ap_group_leave(cid)
+    await show_channel(update, cid, "🔓 LEFT THE GROUP. THIS CHANNEL POSTS ITS OWN POSTS AGAIN.\n\n")
 
 
 # ===================================================================== caption
@@ -607,10 +728,10 @@ async def st_ap_slot(update, context):
 @action("apall")
 async def a_apall(update, context, args):
     cid, page = int(args[0]), (int(args[1]) if len(args) > 1 else 0)
-    total, posted = await db.ap_counts(cid)
-    posts = await db.ap_list_posts(cid, page * PAGE, PAGE)
+    total, posted = await db.ap_pool_counts(cid)         # in a share group: the whole pool
+    posts = await db.ap_pool_list(cid, page * PAGE, PAGE)
     icon = {"pair": "💎", "batch": "👑"}
-    rows = [[nm(f"{'✅' if p['posted'] else '⏳'} #{p['seq']} {p['title'][:24]} · {icon.get(p.get('ptype'), '🔥')}",
+    rows = [[nm(f"{'✅' if p['posted'] else '⏳'}{'' if p['chan'] == cid else '🔗'} #{p['seq']} {p['title'][:22]} · {icon.get(p.get('ptype'), '🔥')}",
                f"adm:app:{p['_id']}")]
             for p in posts]
     rows.append(pager(page, -(-total // PAGE), f"adm:apall:{cid}"))

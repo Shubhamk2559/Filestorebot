@@ -11,6 +11,7 @@ Autoposter engine (no UI here - the panel lives in handlers/autoposter.py).
   ensure_queue              shuffled queue: every post once per cycle in random order (loop = reshuffle each cycle,
                             one pass = pause when every post is posted); new posts are mixed into the running cycle
   next_slot                 next upcoming timing (for the Queue screen)
+  _run_slot_group           channel of a SHARE GROUP: next post of the common pool (atomic claim, no repeat, 7-day gap)
   autopost_loop             background scheduler (all times in IST)
 """
 import asyncio
@@ -445,6 +446,9 @@ async def run_slot(bot, ch: dict, n: int):
         if not ch or not ch.get("enabled", True):
             return
         loop = ch.get("loop", True)
+        if ch.get("group"):                             # share group: post from the common pool
+            await _run_slot_group(bot, ch, n)
+            return
         if ch.get("ptype") == "batch":
             await _run_slot_batch(bot, ch)
             return
@@ -487,6 +491,56 @@ async def run_slot(bot, ch: dict, n: int):
             await notify_owner(bot, f"ap_done_{cid}",
                                f"⏸ <b>{html.escape(ch.get('title', ''))}</b>: ALL POSTS DONE (ONE PASS).\n"
                                "CREATE MORE POSTS AND TURN IT ON, OR RESHUFFLE.", every=60)
+
+
+async def _run_slot_group(bot, ch: dict, n: int):
+    """Channel of a SHARE GROUP: every post comes from the group's common pool. The claim is atomic, so no post is ever
+    taken by two channels; a post that went out anywhere in the group waits `gap_days` (7) before it can go out again.
+    A claimed post that cannot be sent is put back; a crash between claim and send loses it for this cycle only (it is
+    never sent twice)."""
+    cid, gid = ch["_id"], ch["group"]
+    title = html.escape(ch.get("title", ""))
+    sent, rebuilt = 0, False
+    while sent < n:
+        ch = await db.ap_get_channel(cid)
+        if not ch or not ch.get("enabled", True) or ch.get("group") != gid:
+            break
+        loop = ch.get("loop", True)
+        post, why = await db.ap_group_claim(gid, cid)
+        if not post:
+            if why == "empty":
+                if not await db.ap_group_total(gid):
+                    break
+                if loop and not rebuilt:                # cycle done -> new shuffled cycle of the whole pool
+                    rebuilt = True
+                    cyc = int((((await db.ap_group_get(gid)) or {}).get("queue_state") or {}).get("cycle", 0))
+                    await db.ap_group_rebuild(gid, expect_cycle=cyc)
+                    continue
+                if not loop:
+                    await db.ap_set(cid, enabled=False)
+                    await notify_owner(bot, f"ap_done_{cid}",
+                                       f"⏸ <b>{title}</b>: ALL POSTS OF THE POOL DONE (ONE PASS).\n"
+                                       "CREATE MORE POSTS AND TURN IT ON, OR RESHUFFLE.", every=60)
+            elif why == "gap":
+                await notify_owner(bot, f"ap_gap_{gid}",
+                                   f"⏳ <b>{title}</b>: NO POST CAN GO OUT NOW.\n"
+                                   f"EVERY POST LEFT WAS SENT LESS THAN {db.GROUP_GAP_DAYS} DAYS AGO IN THIS GROUP. "
+                                   "CREATE MORE POSTS TO KEEP THE GAP.", every=6 * 3600)
+            break
+        err = await send_post(bot, cid, post, mark=False)
+        if err:
+            dead = err.startswith("thumbnail not found")      # this post can never be sent -> do not put it back
+            await db.ap_group_giveback(gid, post["_id"], post.get("_prev_sent"), requeue=not dead)
+            await notify_owner(bot, f"ap_err_{cid}",
+                               f"⚠️ <b>AUTOPOSTER</b>: CANNOT POST IN <b>{title}</b>:\n"
+                               f"<code>{html.escape(err)}</code>", every=1800)
+            if dead:
+                continue
+            break
+        await db.ap_group_done(gid, cid, post["_id"])
+        sent += 1
+        await asyncio.sleep(POST_DELAY)
+    await db.ap_finalize(cid, sent, False)
 
 
 async def _run_slot_batch(bot, ch: dict):
