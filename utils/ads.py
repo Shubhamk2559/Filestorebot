@@ -1,5 +1,5 @@
 """
-utils/ads.py - Monetag rewarded-ad gate, shown as a Telegram Mini App.
+utils/ads.py - Rewarded-ad gate (Monetag + Adsgram, rotated per user), shown as a Telegram Mini App.
 
 Flow
   1. user opens a file link and passes force-subscribe
@@ -7,6 +7,14 @@ Flow
   3. Mini App (utils/ads_page.py) checks for ad blockers / ad-blocking DNS, loads the Monetag SDK, shows the ad
   4. Monetag calls  GET /monetag/postback  (server to server) -> the ad is confirmed on OUR server
   5. Mini App calls /api/ad/claim -> the session is consumed once -> files are delivered in the chat
+
+Ads rotation (NEW)
+  * two networks: Monetag + Adsgram. Every user has his own counter, so one user sees them alternately
+    (share % is set in Panel -> Ads -> Mix; 50 = ABAB..., 70 = 7 Adsgram : 3 Monetag, ...)
+  * a gate with N ads is a run of N consecutive picks (2 ads = one of each at 50 %)
+  * the SERVER picks the network for every attempt - the user can not choose the cheaper / easier one
+  * no-fill / blocked network -> the SAME ad is served by the OTHER network (failover) before anything else happens
+  * Adsgram verification: Adsgram "Reward URL" (server to server) -> /adsgram/reward -> one reward = one ad (consumed once)
 
 Anti-bypass
   * every API call carries Telegram initData that is HMAC-verified with the bot token (user can't be spoofed)
@@ -43,13 +51,16 @@ from utils.helpers import call, is_admin, notify_owner
 
 log = logging.getLogger(__name__)
 
+AG_SDK = "https://sad.adsgram.ai/js/sad.min.js"   # Adsgram SDK (only this host is allowed)
+AG_DUP_WINDOW = 5            # seconds: two Adsgram reward callbacks this close are one retry, not two ads
+AG_REWARD_TTL = 600          # seconds an unused Adsgram reward stays valid
 SESSION_TTL = 30 * 60        # seconds a gate stays valid
 INIT_DATA_MAX_AGE = 2 * 3600  # Telegram initData freshness
 MAX_ATTEMPTS = 8             # ad attempts per session (user closing ads early also counts)
 MIN_AD_SECONDS = 4           # an ad that "finished" faster than this did not really play
 ATTEMPT_GAP = 1              # minimum seconds between two attempts
 FALLBACK_DAILY = 3           # max no-fill fallbacks per user per day
-NOFILL = {"empty feed", "timeout", "network error", "ad is not ready", "failed to open pop",
+NOFILL = {"adsgram_error", "empty feed", "timeout", "network error", "ad is not ready", "failed to open pop",
           "failed to verify the ad show", "empty zone id"}
 
 # Domains that every ad blocker / ad-blocking DNS (AdGuard, NextDNS, Blokada, Pi-hole...) blocks.
@@ -74,6 +85,75 @@ def zone() -> str:
 def sdk_url() -> str:
     u = str(S.get("ads_sdk_url") or "").strip()
     return u if re.fullmatch(r"https://[^\s'\"<>]+", u) else "https://libtl.com/sdk.js"
+
+
+def ag_block() -> str:
+    """Adsgram blockId (Reward block = digits, e.g. 12345). '' = not set."""
+    b = str(S.get("ads_ag_block") or "").strip()
+    return b if re.fullmatch(r"(int-)?\d{1,12}", b) else ""
+
+
+def ag_ready() -> bool:
+    return bool(S.get("ads_ag_enabled")) and bool(ag_block())
+
+
+def providers() -> list:
+    """Networks that can serve an ad right now (order = preference when nothing else decides)."""
+    out = []
+    if zone():
+        out.append("monetag")
+    if ag_ready():
+        out.append("adsgram")
+    return out
+
+
+def ag_share() -> int:
+    v = S.get("ads_ag_share")
+    try:
+        return max(0, min(100, int(50 if v is None else v)))
+    except (TypeError, ValueError):
+        return 50
+
+
+def pick_provider(k: int, provs: list) -> str:
+    """Pure rotation: ad number k of ONE user -> network. Even spread, e.g. share 50 = M,A,M,A ... share 70 = 7 of 10 Adsgram."""
+    if len(provs) == 1:
+        return provs[0]
+    share = ag_share()
+    ag = ((k + 1) * share) // 100 > (k * share) // 100
+    return "adsgram" if ag else "monetag"
+
+
+async def _plan(uid: int, need: int, provs: list) -> list:
+    """The networks for the `need` ads of one gate. A per-user counter makes ONE user see the networks in turn."""
+    if len(provs) == 1:
+        return [provs[0]] * need
+    k0 = 0
+    try:
+        old = await db.usage_col.find_one_and_update(
+            {"_id": f"rot:{uid}"},
+            {"$inc": {"n": need}, "$set": {"expire_at": _utcnow() + dt.timedelta(days=90)}}, upsert=True)
+        k0 = int((old or {}).get("n", 0))
+    except Exception:
+        k0 = secrets.randbelow(1000)
+    k0 += uid % 100                                        # different users start on different networks
+    return [pick_provider(k0 + i, provs) for i in range(need)]
+
+
+def choose_provider(s: dict, provs: list) -> str:
+    """Network for the NEXT attempt of this session. Planned one first; a network that already failed this ad
+    (no-fill / blocked) is skipped while another one is still untried -> failover instead of a lost ad."""
+    order = s.get("order") or []
+    i = int(s.get("done_n", 0))
+    pref = order[i] if i < len(order) else provs[0]
+    if pref not in provs:
+        pref = provs[0]                                    # network switched off in the panel meanwhile
+    failed = set(s.get("failed_prov") or [])
+    if pref in failed:
+        alt = [p for p in provs if p not in failed]
+        if alt:
+            return alt[0]
+    return pref
 
 
 def mini_app_ready() -> bool:
@@ -139,10 +219,11 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
         return False
     if is_admin(chat_id) and not S.get("ads_admin_test"):
         return False   # admins skip ads (turn on "Test as admin" in Panel -> Ads to see the gate yourself)
-    if not zone() or not mini_app_ready():
+    provs = providers()
+    if not provs or not mini_app_ready():
         await notify_owner(bot, "ads_cfg",
                            "⚠️ <b>ADS NOT CONFIGURED</b>\n\n"
-                           f"{'ZONE ID IS MISSING' if not zone() else 'BASE_URL IS NOT A PUBLIC HTTPS URL'}.\n"
+                           f"{'NO AD NETWORK IS SET (MONETAG ZONE ID / ADSGRAM BLOCK ID)' if not provs else 'BASE_URL IS NOT A PUBLIC HTTPS URL'}.\n"
                            "FILES GO OUT WITHOUT ADS UNTIL YOU FIX IT IN PANEL ▸ MONETIZATION ▸ ADS.", every=300)
         return False
 
@@ -157,12 +238,14 @@ async def gate(bot, chat_id: int, link: dict) -> bool:
 
     sid = secrets.token_hex(12)
     now = time.time()
+    order = await _plan(chat_id, need, provs)
     await db.ads_col.insert_one({
         "_id": sid, "uid": chat_id, "token": link["_id"], "status": "open", "created": now,
         "exp": now + SESSION_TTL, "expire_at": _utcnow() + dt.timedelta(seconds=SESSION_TTL + 600),
         "need": need, "done_n": 0,
         "attempts": 0, "fails": 0, "outcome_n": 0, "attempt_started": 0.0,
         "ad_seen": False, "shown": False, "fallback": False, "blocked": None, "probe_at": 0.0,
+        "order": order, "prov": None, "failed_prov": [], "blocked_prov": [],
     })
     try:
         msg = await call(
@@ -231,7 +314,23 @@ def _verified(s) -> bool:
         return True
     if not s.get("shown"):
         return False
-    return bool(s.get("ad_seen")) if S.get("ads_postback") else True
+    need_pb = S.get("ads_ag_postback") if s.get("prov") == "adsgram" else S.get("ads_postback")
+    return bool(s.get("ad_seen")) if need_pb else True
+
+
+async def _ag_try(s: dict) -> bool:
+    """Adsgram server verification: use ONE unused reward callback of this user that arrived after this attempt started.
+    Atomic (find_one_and_update) -> one reward can never confirm two ads. Updates `s` in place."""
+    if s.get("prov") != "adsgram" or s.get("ad_seen") or not s.get("shown") or not S.get("ads_ag_postback"):
+        return bool(s.get("ad_seen"))
+    got = await db.pb_col.find_one_and_update(
+        {"kind": "ag", "uid": s["uid"], "used": False, "t": {"$gte": s.get("attempt_started", 0.0) - 1}},
+        {"$set": {"used": True, "sid": s["_id"]}})
+    if got:
+        await db.ads_col.update_one({"_id": s["_id"], "status": "open"},
+                                    {"$set": {"ad_seen": True, "ad_seen_at": time.time(), "ad_value": "adsgram"}})
+        s["ad_seen"] = True
+    return bool(s.get("ad_seen"))
 
 
 async def api_init(request):
@@ -241,7 +340,7 @@ async def api_init(request):
         state = "done"
     return _reply(state=state, zone=zone(), sdk=sdk_url(), tries=int(S.get("ads_tries") or 3),
                   strict=bool(S.get("ads_block_adblock")), postback=bool(S.get("ads_postback")),
-                  probes=PROBES)
+                  probes=PROBES, provs=providers(), ag_block=ag_block() if ag_ready() else "", ag_sdk=AG_SDK)
 
 
 async def api_probe(request):
@@ -276,9 +375,14 @@ async def api_attempt(request):
         return _reply(ok=False, state="too_many")
     if now - s.get("attempt_started", 0) < ATTEMPT_GAP:
         return _reply(ok=False, state="slow_down")
+    provs = providers()
+    if not provs:
+        return _reply(ok=False, state="closed")
+    prov = choose_provider(s, provs)                          # decided here, on the server
     await db.ads_col.update_one({"_id": s["_id"]}, {"$inc": {"attempts": 1},
-                                                    "$set": {"attempt_started": now, "shown": False}})
-    return _reply(ok=True, ymid=s["_id"], n=s["attempts"] + 1)
+                                                    "$set": {"attempt_started": now, "shown": False, "prov": prov,
+                                                             "ad_seen": False}})
+    return _reply(ok=True, ymid=s["_id"], n=s["attempts"] + 1, prov=prov)
 
 
 async def api_shown(request):
@@ -297,6 +401,7 @@ async def api_shown(request):
     if elapsed < MIN_AD_SECONDS:
         return _reply(state="too_fast")
     fresh = await db.ads_col.find_one({"_id": s["_id"]})
+    await _ag_try(fresh)
     return _reply(state="ready" if _verified(fresh) else "verifying")
 
 
@@ -305,6 +410,7 @@ async def api_status(request):
     body, s = await _auth(request)
     if _closed(s):
         return _reply(state="closed")
+    await _ag_try(s)
     if _verified(s):
         return _reply(state="ready")
     if not body.get("wait"):
@@ -315,6 +421,7 @@ async def api_status(request):
             fresh = await db.ads_col.find_one({"_id": s["_id"]})
             if not fresh or _closed(fresh):
                 return _reply(state="closed")
+            await _ag_try(fresh)
             if _verified(fresh):
                 return _reply(state="ready")
             try:
@@ -328,26 +435,41 @@ async def api_status(request):
 
 
 async def api_fail(request):
-    """The SDK could not show an ad. After N genuine no-fill tries the user gets the files without an ad."""
+    """The SDK could not show an ad. The SAME ad is retried on the OTHER network first. Only when every network has
+    failed and the no-fill limit is reached can the user get files without an ad (and only if the panel allows it)."""
     body, s = await _auth(request)
     if _closed(s):
         return _reply(state="closed")
     if s["outcome_n"] >= s["attempts"]:
         return _reply(state="no_attempt")
     reason = str(body.get("reason", "")).strip().lower()[:60]
+    prov = s.get("prov") or "monetag"                       # the network the SERVER chose, never the client's word
+    strict = bool(S.get("ads_block_adblock"))
     await db.ads_col.update_one({"_id": s["_id"], "outcome_n": s["outcome_n"]},
                                 {"$set": {"outcome_n": s["attempts"]}})
-    if reason not in NOFILL:                               # user closed the ad etc. -> not a no-fill
+    provs = providers()
+
+    if reason == "sdk_blocked" and strict:                  # this network's SDK host is unreachable -> blocked by DNS / blocker
+        await db.ads_col.update_one({"_id": s["_id"]}, {"$addToSet": {"failed_prov": prov, "blocked_prov": prov}})
+        if set(provs) <= set(s.get("blocked_prov") or []) | {prov}:
+            await bump("blocked")
+            return _reply(state="blocked")                  # every network is blocked for this user -> no ad, no files
+        return _reply(state="retry", fails=s["fails"])      # the other network may still work
+
+    if reason != "sdk_blocked" and reason not in NOFILL:    # user closed / skipped the ad -> not a no-fill
         return _reply(state="retry", fails=s["fails"])
 
     fails = s["fails"] + 1
-    await db.ads_col.update_one({"_id": s["_id"]}, {"$set": {"fails": fails}})
+    await db.ads_col.update_one({"_id": s["_id"]}, {"$set": {"fails": fails}, "$addToSet": {"failed_prov": prov}})
+    tried = set(s.get("failed_prov") or []) | {prov}
     tries = int(S.get("ads_tries") or 3)
-    if fails < tries:
+    if fails < tries or not set(provs) <= tried:            # not enough tries / a network was not even tried yet
         return _reply(state="retry", fails=fails)
 
     # ---- fallback decision (all checked on the server)
-    if S.get("ads_block_adblock") and not _clean_probe(s):
+    if not S.get("ads_nofill_free"):
+        return _reply(state="no_fallback")                  # strict mode: no ad = no files, never
+    if strict and not _clean_probe(s):
         return _reply(state="blocked")
     if await _fallback_used(s["uid"]) >= FALLBACK_DAILY:
         return _reply(state="no_fallback")
@@ -374,6 +496,7 @@ async def api_claim(request):
         return _reply(ok=True, state="done")
     if _closed(s):
         return _reply(ok=False, state="closed")
+    await _ag_try(s)
     if not _verified(s):
         return _reply(ok=False, state="not_verified")
     need, done_n = int(s.get("need", 1)), int(s.get("done_n", 0))
@@ -381,17 +504,21 @@ async def api_claim(request):
         nxt = await db.ads_col.find_one_and_update(
             {"_id": s["_id"], "status": "open", "done_n": done_n},
             {"$set": {"attempts": 0, "fails": 0, "outcome_n": 0, "attempt_started": 0.0, "ad_seen": False,
-                      "shown": False, "exp": time.time() + SESSION_TTL,
+                      "shown": False, "exp": time.time() + SESSION_TTL, "prov": None,
+                      "failed_prov": [], "blocked_prov": [],
                       "expire_at": _utcnow() + dt.timedelta(seconds=SESSION_TTL + 600)},
              "$inc": {"done_n": 1}})
         if nxt:
             await bump("verified")
+            await bump("ag_ok" if s.get("prov") == "adsgram" else "mt_ok")
         return _reply(ok=True, state="next", done=done_n + 1, need=need)
     taken = await db.ads_col.find_one_and_update({"_id": s["_id"], "status": "open"},
                                                  {"$set": {"status": "done", "done_at": time.time()}})
     if not taken:                                           # lost a race with a second claim: files go out once
         return _reply(ok=True, state="done")
     await bump("fallback" if s.get("fallback") else "verified")
+    if not s.get("fallback"):
+        await bump("ag_ok" if s.get("prov") == "adsgram" else "mt_ok")
     bot = request.app["bot"]
     task = asyncio.create_task(_deliver_after_ad(bot, s))
     _tasks.add(task)
@@ -475,10 +602,45 @@ async def postback(request):
     return web.Response(text="ok")   # always 2xx for a valid secret so Monetag doesn't keep retrying
 
 
+async def ag_reward_url() -> str:
+    """Paste this as 'Reward URL' of your Adsgram Reward block ([userId] is replaced by Adsgram itself)."""
+    sec = await ensure_secret()
+    return f"{config.BASE_URL}/adsgram/reward?secret={sec}&userid=[userId]"
+
+
+async def ag_reward(request):
+    """Adsgram -> our server, after a user really finished an Adsgram ad. Stored as ONE unused reward of that user."""
+    q = request.query
+    if not hmac.compare_digest(q.get("secret", ""), S.get("ads_secret") or secrets.token_hex(8)):
+        raise web.HTTPForbidden(text="bad secret")
+    uid_raw = q.get("userid", "").strip()
+    if not uid_raw.isdigit() or len(uid_raw) > 15:
+        return web.Response(text="ok")
+    uid, now = int(uid_raw), time.time()
+    if now - (S.get("ads_ag_last") or 0) > 60:
+        await S.set("ads_ag_last", now)
+    try:                                                      # a retry of the same callback is not a second ad
+        old = await db.pb_col.find_one_and_update(
+            {"_id": f"agl:{uid}"}, {"$set": {"t": now, "expire_at": dt.datetime.utcfromtimestamp(now + 300)}}, upsert=True)
+        if old and now - (old.get("t") or 0) < AG_DUP_WINDOW:
+            return web.Response(text="ok")
+    except Exception:
+        pass
+    await db.pb_col.insert_one({"_id": f"ag:{uid}:{secrets.token_hex(6)}", "kind": "ag", "uid": uid, "t": now,
+                                "used": False, "expire_at": dt.datetime.utcfromtimestamp(now + AG_REWARD_TTL)})
+    await db.earn_inc(ag_imp=1)                               # Adsgram ads shown (revenue: see the Adsgram dashboard)
+    async for s in db.ads_col.find({"uid": uid, "status": "open", "prov": "adsgram"}, {"_id": 1}):
+        ev = _seen.get(s["_id"])
+        if ev:
+            ev.set()                                          # wake the waiting Mini App at once
+    return web.Response(text="ok")
+
+
 def _boot_json() -> str:
     return json.dumps({"zone": zone(), "sdk": sdk_url(), "tries": int(S.get("ads_tries") or 3),
                        "strict": bool(S.get("ads_block_adblock")), "postback": bool(S.get("ads_postback")),
-                       "probes": PROBES, "support": SUP.url() or ""}).replace("</", "<\\/")
+                       "probes": PROBES, "support": SUP.url() or "",
+                       "provs": providers(), "ag_block": ag_block() if ag_ready() else "", "ag_sdk": AG_SDK}).replace("</", "<\\/")
 
 
 async def page(request):
@@ -511,3 +673,4 @@ def setup_routes(app: web.Application):
     app.router.add_post("/api/ad/fail", api_fail)
     app.router.add_post("/api/ad/claim", api_claim)
     app.router.add_get("/monetag/postback", postback)
+    app.router.add_get("/adsgram/reward", ag_reward)

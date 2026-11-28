@@ -148,7 +148,7 @@ async def _summary(update):
             ["ALL TIME", _m(tot_rev)]]
 
     note = ""
-    if not ads.zone() or not ads.mini_app_ready():
+    if not ads.providers() or not ads.mini_app_ready():
         note = "\n⚠️ ADS ARE NOT SET UP YET."
     elif tot_imp and not tot_rev:
         note = "\n⚠️ MONETAG SENDS NO PRICE. CHECK THE POSTBACK URL IN 📺 ADS."
@@ -160,7 +160,8 @@ async def _summary(update):
         "📈 <b>EARNINGS</b>\n\n"
         + _table(rows, [10, 10]) +
         f"🎯 eCPM ▸ <b>{ecpm}</b> · PER VIEW ▸ <b>{per_view}</b>\n"
-        "<i>MONETAG ESTIMATE · DAYS CHANGE AT 12:00 UTC (5:30 AM IST), LIKE MONETAG.</i>" + note,
+        "<i>MONETAG ESTIMATE · DAYS CHANGE AT 12:00 UTC (5:30 AM IST), LIKE MONETAG.</i>"
+        + ("\n<i>ADSGRAM EARNINGS: SEE partner.adsgram.ai (NOT INCLUDED ABOVE).</i>" if ads.ag_ready() else "") + note,
         _kb(),
     )
 

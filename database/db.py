@@ -91,6 +91,13 @@ DEFAULTS = {
     "ads_tries": 3,               # no-fill tries before files are given without an ad
     "ads_last_postback": 0,
     "ads_admin_test": False,      # show the ad gate to admins too (for testing)
+    # ---- Adsgram (2nd network) + rotation
+    "ads_ag_enabled": False,      # Adsgram on/off
+    "ads_ag_block": "",           # Adsgram blockId (Reward block, digits)
+    "ads_ag_postback": False,     # verify Adsgram ads server-side with the Reward URL (needs Reward URL enabled by Adsgram)
+    "ads_ag_share": 50,           # % of ads served by Adsgram, rest Monetag (rotation per user; 0 = Monetag only, 100 = Adsgram only)
+    "ads_ag_last": 0,             # time of the last Adsgram reward callback
+    "ads_nofill_free": False,     # give files without an ad when EVERY network has no ad (False = never, strongest)
     # ---- Support Bot (handlers/support.py): a second bot, one forum topic per user
     "support_token": "",          # token of the Support Bot (sent by the owner in the panel)
     "support_username": "",

@@ -108,7 +108,8 @@ var $ = function(id){return document.getElementById(id)};
 var sid = new URLSearchParams(location.search).get("s") || "";
 var BOOT = __BOOT__;               /* settings baked in by the server -> no init round trip before we start */
 var PRELOAD = true;                /* ask the ad SDK to fetch the ad in the background while we check things */
-var cfg = BOOT, sdkReady = false, sdkTag = null;
+var cfg = BOOT, sdkReady = false, sdkTag = null, agCtrl = null, agTag = null;
+function hasProv(p){ return (cfg.provs||[]).indexOf(p) > -1; }
 
 function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
 function ui(icon,title,text,o){
@@ -157,16 +158,28 @@ function baitHidden(){
   });
 }
 async function detect(){
-  var sdkHost=new URL(cfg.sdk).origin+"/";
-  var r=await Promise.all([ping("/health",4000),baitHidden(),ping(sdkHost)].concat(cfg.probes.map(function(u){return ping(u)})));
-  var ctrl=r[0], bait=r[1], sdk=r[2], gen=r.slice(3);
+  var r=await Promise.all([ping("/health",4000),baitHidden()].concat(cfg.probes.map(function(u){return ping(u)})));
+  var ctrl=r[0], bait=r[1], gen=r.slice(2);
   if(ctrl!=="ok") return {offline:true,blocked:false,detail:"offline"};
   var genFail=gen.filter(function(x){return x==="fail"}).length;
   var why=[];
   if(bait) why.push("bait");
-  if(sdk==="fail") why.push("sdkhost");
   if(genFail>=2) why.push("dns"+genFail);
   return {offline:false,blocked:why.length>0,detail:why.join(",")};
+}
+function loadAdsgram(){
+  return new Promise(function(res,rej){
+    if(agCtrl) return res();
+    if(agTag) agTag.remove();
+    var s=document.createElement("script");
+    s.src=cfg.ag_sdk; s.async=true;
+    s.onload=function(){
+      try{ agCtrl=window.Adsgram.init({blockId:String(cfg.ag_block)}); res(); }
+      catch(e){ rej(new Error("sdk_missing")); }
+    };
+    s.onerror=function(){ rej(new Error("sdk_blocked")); };
+    agTag=s; document.head.appendChild(s);
+  });
 }
 function loadSdk(){
   return new Promise(function(res,rej){
@@ -217,10 +230,30 @@ async function pollReady(sec){
 }
 async function ensureSdk(){
   if(sdkReady) return true;
+  if(!cfg.zone) return false;
   try{ await loadSdk(); sdkReady=true; return true; }catch(e){ return false; }
 }
+async function ensureAdsgram(){
+  if(agCtrl) return true;
+  if(!cfg.ag_block) return false;
+  try{ await loadAdsgram(); return !!agCtrl; }catch(e){ return false; }
+}
+function ensureProv(p){ return p==="adsgram" ? ensureAdsgram() : ensureSdk(); }
+async function showAdsgram(){
+  if(!agCtrl) throw new Error("sdk_blocked");
+  try{
+    var r=await agCtrl.show();
+    if(r && r.done===false) throw new Error("adsgram_skip");
+    return r;
+  }catch(e){
+    if(e && typeof e==="object" && !(e instanceof Error) && ("error" in e || "done" in e)){
+      throw new Error(e.error ? "adsgram_error" : "adsgram_skip");
+    }
+    throw e;
+  }
+}
 function preloadAd(){
-  if(!PRELOAD||!sdkReady) return;
+  if(!PRELOAD||!sdkReady||!cfg.zone) return;
   try{
     var p=window["show_"+cfg.zone]({type:"preload",ymid:sid,requestVar:"files"});
     if(p&&p.catch) p.catch(function(){});
@@ -242,7 +275,8 @@ async function run(){
   /* start everything at the same time instead of one step after another */
   var initP = api("init");
   var envP  = detect();
-  var sdkP  = ensureSdk().then(function(ok){ if(ok) preloadAd(); return ok; });
+  var sdkP  = Promise.all([hasProv("monetag")?ensureSdk().then(function(ok){ if(ok) preloadAd(); return ok; }):true,
+                           hasProv("adsgram")?ensureAdsgram():true]);
 
   var st;
   try{ st=await initP; }catch(e){ ui("⚠️","Session invalid","Go back to the chat and open your file link again."); return; }
@@ -255,15 +289,14 @@ async function run(){
     if(first){ env=await envP; sdkOk=await sdkP; first=false; }
     else{
       ui("🔍","Checking your connection…","",{spin:true});
-      env=await detect(); sdkOk=await ensureSdk();
+      env=await detect(); sdkOk=await sdkP;
     }
     if(env.offline){ ui("📡","No internet","Check your connection and try again.",{btn:"Try again"}); await waitClick(); continue; }
     if(cfg.strict && env.blocked){
       try{await api("probe",{blocked:true,detail:env.detail});}catch(e){}
       showBlocked(); await waitClick(); continue;
     }
-    if(!sdkOk && cfg.strict){ try{await api("probe",{blocked:true,detail:"sdk"});}catch(_){} showBlocked(); await waitClick(); continue; }
-    if(sdkOk) preloadAd();
+    preloadAd();
 
     var a=await api("attempt",{blocked:false,detail:""});   /* the clean probe result rides along */
     if(!a.ok){
@@ -273,10 +306,11 @@ async function run(){
     }
 
     ui("🎬","Loading ad…","Watch the ad till the end.",{spin:true});
-    var shown=false, reason="";
+    var prov=a.prov||"monetag", shown=false, reason="";
     try{
-      if(!sdkReady) throw new Error("Network error");
-      await window["show_"+cfg.zone]({ymid:a.ymid,requestVar:"files"});
+      if(!(await ensureProv(prov))) throw new Error("sdk_blocked");
+      if(prov==="adsgram") await showAdsgram();
+      else await window["show_"+cfg.zone]({ymid:a.ymid,requestVar:"files"});
       shown=true;
     }catch(e){ reason=String((e&&e.message)||e); }
 
@@ -292,15 +326,18 @@ async function run(){
     var env2=await detect();
     if(cfg.strict && env2.blocked){
       try{await api("probe",{blocked:true,detail:env2.detail});}catch(e){}
-      sdkReady=false; showBlocked(); await waitClick(); continue;
+      sdkReady=false; agCtrl=null; showBlocked(); await waitClick(); continue;
     }
+    if(reason==="sdk_blocked"){ if(prov==="adsgram") agCtrl=null; else sdkReady=false; }
     await api("probe",{blocked:false,detail:""});
     var f=await api("fail",{reason:reason});
     if(f.state==="ready"){ if(await claim()) return; continue; }
     if(f.state==="blocked"){ showBlocked(); await waitClick(); continue; }
     if(f.state==="no_fallback"||f.state==="closed"){ finalMsg(f.state); return; }
-    if(f.state==="retry" && f.fails>0){
-      ui("🔄","No ad available","Trying again ("+f.fails+"/"+cfg.tries+")…",{spin:true});
+    if(f.state==="retry" && /skip|close/i.test(reason)){
+      ui("🔄","Ad was closed","Please watch the full ad to unlock your files.",{spin:true});
+    }else if(f.state==="retry" && (f.fails>0 || reason==="sdk_blocked")){
+      ui("🔄","No ad available","Trying another ad…",{spin:true});
     }else{
       ui("🔄","Ad was closed","Please watch the full ad to unlock your files.",{spin:true});
     }

@@ -838,7 +838,7 @@ async def a_resetyes(update, context, args):
     await show(update, "✅ SETTINGS RESET.", K.back("settings"))
 
 
-# ===================================================================== ads (Monetag Mini App)
+# ===================================================================== ads (Monetag + Adsgram Mini App)
 
 @action("ads")
 async def a_ads(update, context, args):
@@ -846,10 +846,31 @@ async def a_ads(update, context, args):
     a = args[0] if args else ""
 
     if a == "t":
-        if not S.get("ads_enabled") and not ads.zone():
-            msg = "⚠️ SET THE ZONE ID FIRST."
+        if not S.get("ads_enabled") and not ads.providers():
+            msg = "⚠️ SET THE MONETAG ZONE ID OR THE ADSGRAM BLOCK ID FIRST."
         else:
             await S.set("ads_enabled", not S.get("ads_enabled"))
+    elif a == "agt":
+        if not S.get("ads_ag_enabled") and not ads.ag_block():
+            msg = "⚠️ SET THE ADSGRAM BLOCK ID FIRST."
+        else:
+            await S.set("ads_ag_enabled", not S.get("ads_ag_enabled"))
+    elif a == "agpb":
+        await S.set("ads_ag_postback", not S.get("ads_ag_postback"))
+    elif a == "nf":
+        await S.set("ads_nofill_free", not S.get("ads_nofill_free"))
+    elif a == "mix":                                         # cycle the Adsgram share: 50 -> 70 -> 30 -> 100 -> 0 -> 50
+        steps = [50, 70, 30, 100, 0]
+        cur = ads.ag_share()
+        await S.set("ads_ag_share", steps[(steps.index(cur) + 1) % len(steps)] if cur in steps else 50)
+    elif a == "agb":
+        await ask(update, context, "ads_ag_block",
+                  head("🧩", "Adsgram Block ID", f"NOW ▸ <code>{esc(ads.ag_block()) or 'NOT SET'}</code>\n\n"
+                                                 "SEND YOUR ADSGRAM <b>REWARD BLOCK ID</b> (DIGITS, E.G. <code>12345</code>)."))
+        return
+    elif a == "agurl":
+        await show_ag_url(update)
+        return
     elif a == "pb":
         await S.set("ads_postback", not S.get("ads_postback"))
     elif a == "ab":
@@ -859,7 +880,7 @@ async def a_ads(update, context, args):
     elif a == "newsec":
         await S.set("ads_secret", "")
         await ads.ensure_secret()
-        await show_postback(update, "🔑 NEW SECRET CREATED. PASTE THE NEW URL IN MONETAG.")
+        await show_postback(update, "🔑 NEW SECRET CREATED. PASTE THE NEW URLS IN MONETAG AND ADSGRAM (📡 ADSGRAM URL).")
         return
     elif a == "pburl":
         await show_postback(update)
@@ -883,7 +904,15 @@ async def a_ads(update, context, args):
     if not ads.mini_app_ready():
         warns.append("BASE_URL MUST BE A PUBLIC HTTPS URL.")
     if not ads.zone():
-        warns.append("ZONE ID IS NOT SET.")
+        warns.append("MONETAG ZONE ID IS NOT SET.")
+    if S.get("ads_ag_enabled") and not ads.ag_block():
+        warns.append("ADSGRAM BLOCK ID IS NOT SET.")
+    if on and S.get("ads_ag_enabled") and S.get("ads_ag_postback") and not S.get("ads_ag_last"):
+        warns.append("NO ADSGRAM REWARD YET. PASTE THE REWARD URL IN ADSGRAM.")
+    if on and S.get("ads_ag_enabled") and not S.get("ads_ag_postback"):
+        warns.append("ADSGRAM SERVER VERIFY IS OFF. TURN IT ON AS SOON AS ADSGRAM ENABLES THE REWARD URL.")
+    if S.get("ads_nofill_free"):
+        warns.append("FREE FILES ON NO-FILL ARE ON (USERS CAN SKIP ADS WHEN NO AD LOADS). TURN OFF FOR STRICT MODE.")
     if on and S.get("ads_postback") and not S.get("ads_last_postback"):
         warns.append("NO POSTBACK YET. PASTE THE URL IN MONETAG.")
     if not S.get("ads_postback"):
@@ -896,6 +925,10 @@ async def a_ads(update, context, args):
                note(msg) + head("📺", "Ads", "SELECT AN OPTION TO MANAGE ADS.")
                + "".join(f"\n⚠️ {w}" for w in warns),
                kb([[ub("🔕 Turn OFF" if on else "🔔 Turn ON", "adm:ads:t")]]
+                  + grid([(f"🅰️ Adsgram: {st('ads_ag_enabled')}", "adm:ads:agt"), ("🧩 Adsgram Block", "adm:ads:agb"),
+                          (f"🔁 Mix: M{100 - ads.ag_share()}/A{ads.ag_share()}", "adm:ads:mix"),
+                          (f"🛰 AG Verify: {st('ads_ag_postback')}", "adm:ads:agpb"),
+                          (f"🎁 No-fill free: {st('ads_nofill_free')}", "adm:ads:nf"), ("📡 Adsgram URL", "adm:ads:agurl")])
                   + grid([("✏️ Zone ID", "adm:ads:zone"), ("🔗 SDK URL", "adm:ads:sdk"),
                           (f"🛰 Verify: {st('ads_postback')}", "adm:ads:pb"),
                           (f"🛡 AdBlock: {st('ads_block_adblock')}", "adm:ads:ab"),
@@ -914,14 +947,29 @@ async def show_postback(update, msg: str = ""):
                kb(grid([("🔑 New Secret", "adm:ads:newsec"), ("🔙 Back", "adm:ads")])))
 
 
+async def show_ag_url(update, msg: str = ""):
+    await show(update,
+               note(msg) + head("📡", "Adsgram Setup",
+                                "1) partner.adsgram.ai → CREATE PLATFORM (TELEGRAM MINI-APP):\n"
+                                f"WEB APP URL ▸ <code>{esc(config.BASE_URL or 'BASE_URL NOT SET')}</code>\n"
+                                "BOT ID ▸ THE ID OF THIS BOT (BOTFATHER → /mybots → API TOKEN, NUMBER BEFORE THE :)\n\n"
+                                "2) CREATE A <b>REWARD</b> BLOCK AND PASTE THIS AS <b>REWARD URL</b>:\n"
+                                f"<code>{esc(await ads.ag_reward_url())}</code>\n\n"
+                                "3) SEND THE BLOCK ID WITH 🧩 ADSGRAM BLOCK, THEN TURN 🅰️ ADSGRAM ON.\n\n"
+                                "REWARD URL IS OPTIONAL FOR SMALL APPS: ASK @adsgram_supportbot TO ENABLE IT, THEN TURN 🛰 AG VERIFY ON."),
+               kb(grid([("🔑 New Secret", "adm:ads:newsec"), ("🔙 Back", "adm:ads")])))
+
+
 async def show_ads_stats(update):
     st = await ads.get_stats()
     await show(update,
                head("📈", "Ad Stats",
                     f"✅ VERIFIED ▸ <b>{st.get('verified', 0)}</b>\n"
                     f"🎁 FREE FILES ▸ <b>{st.get('fallback', 0)}</b>\n"
-                    f"🚫 BLOCKED ▸ <b>{st.get('blocked', 0)}</b>\n\n"
+                    f"🚫 BLOCKED ▸ <b>{st.get('blocked', 0)}</b>\n"
+                    f"🅼 MONETAG ADS ▸ <b>{st.get('mt_ok', 0)}</b> · 🅰️ ADSGRAM ADS ▸ <b>{st.get('ag_ok', 0)}</b>\n\n"
                     f"🛰 LAST POSTBACK ▸ <b>{ago(S.get('ads_last_postback'))}</b>\n"
+                    f"🛰 LAST ADSGRAM REWARD ▸ <b>{ago(S.get('ads_ag_last'))}</b>\n"
                     f"🔁 NO-FILL TRIES ▸ <b>{S.get('ads_tries')}</b> (MAX {ads.FALLBACK_DAILY} / USER / DAY)"),
                kb(grid([("🔄 Refresh", "adm:ads:stat"), ("🔙 Back", "adm:ads")])))
 
@@ -934,6 +982,16 @@ async def st_ads_zone(update, context):
         return
     await S.set("ads_zone", z)
     await done(update, context, f"✅ ZONE ID SAVED ▸ <code>{z}</code>", "ads")
+
+
+@state("ads_ag_block")
+async def st_ads_ag_block(update, context):
+    b = (update.effective_message.text or "").strip()
+    if not re.fullmatch(r"(int-)?\d{1,12}", b):
+        await warn(update, "SEND THE BLOCK ID LIKE <code>12345</code> (REWARD BLOCK).")
+        return
+    await S.set("ads_ag_block", b)
+    await done(update, context, f"✅ ADSGRAM BLOCK ID SAVED ▸ <code>{b}</code>", "ads")
 
 
 @state("ads_sdk")

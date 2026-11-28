@@ -159,3 +159,24 @@ One style everywhere (`utils/ui.py` text, `utils/keyboards.py` buttons): bold CA
 post / link titles keep their own case. Settings values are shown only inside their own screen, never in the parent menu.
 
 Offline UI test (no Telegram / MongoDB needed): `python3 tests/test_ui.py`
+
+---
+
+## Ads rotation: Monetag + Adsgram
+
+Panel → Monetization → Ads has these extra buttons:
+
+| Button | What it does |
+|---|---|
+| 🅰️ Adsgram ON/OFF | turns the 2nd network on (needs the Block ID first) |
+| 🧩 Adsgram Block | your Adsgram **Reward** block id (digits) |
+| 🔁 Mix | share of ads served by Adsgram: M50/A50 → M30/A70 → M70/A30 → A100 → M100 (tap to cycle) |
+| 🛰 AG Verify | server-to-server check with Adsgram's Reward URL (strongest, turn on once Adsgram enables it) |
+| 🎁 No-fill free | OFF = no ad, no files (strict). ON = old behaviour (files after repeated no-fill) |
+| 📡 Adsgram URL | step by step setup + the Reward URL to paste in Adsgram |
+
+How the rotation works: every user has his own counter, so ONE user sees the networks in turn (a 2-ad gate = one Monetag + one Adsgram at 50 %).
+The server picks the network for each attempt. If a network has no ad or is blocked, the same ad is served by the other network.
+Adsgram earnings are in the Adsgram dashboard (partner.adsgram.ai); Monetag earnings stay in 📈 Earnings.
+
+Tests: `python tests/test_ads_rotation.py`
